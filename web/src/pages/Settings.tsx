@@ -1,0 +1,261 @@
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '../lib/api';
+import { PageHeader } from '../components/Shell';
+import { useDialer } from '../lib/dialer';
+import { useAuth } from '../lib/auth';
+
+interface SettingsShape {
+  provider: 'twilio' | 'telnyx';
+  twilio: { accountSid: string; authToken: string; apiKeySid: string; apiKeySecret: string; number: string; twimlApp: string };
+  telnyx: { apiKey: string; connectionId: string; number: string };
+  recordingEnabled: boolean;
+  ringTimeoutSec: number;
+  configured: boolean;
+}
+
+export function Settings() {
+  const qc = useQueryClient();
+  const { refresh } = useAuth();
+  const dialer = useDialer();
+  const { data } = useQuery<SettingsShape>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
+  const [form, setForm] = useState<SettingsShape | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [test, setTest] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (data && !form) setForm(data);
+  }, [data, form]);
+
+  if (!form) return <div className="p-6 text-sm text-muted">Loading…</div>;
+
+  const setT = (k: string, v: string) => setForm({ ...form, twilio: { ...form.twilio, [k]: v } });
+  const setX = (k: string, v: string) => setForm({ ...form, telnyx: { ...form.telnyx, [k]: v } });
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await api.put<any>('/api/settings', form);
+      setForm(res);
+      setSaved(true);
+      if (res.appError) setErr(`Saved, but Twilio app setup failed: ${res.appError}`);
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      refresh();
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e: any) {
+      setErr(e?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTest({ loading: true });
+    try {
+      const res = await api.post<any>('/api/settings/test');
+      setTest(res);
+    } catch (e: any) {
+      setTest({ ok: false, error: e?.message });
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Settings" sub="Phone provider, credentials and audio">
+        <button className="btn-primary !py-1.5 text-xs" onClick={save} disabled={busy}>
+          {busy ? 'Saving…' : saved ? 'Saved ✓' : 'Save changes'}
+        </button>
+      </PageHeader>
+
+      <div className="max-w-3xl space-y-4 p-6">
+        {err && <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">{err}</p>}
+
+        <section className="panel p-4">
+          <h2 className="text-sm font-semibold">Phone provider</h2>
+          <p className="mt-1 text-xs text-muted">Pick which service places your calls. You can switch any time.</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(['twilio', 'telnyx'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setForm({ ...form, provider: p })}
+                className={`rounded-md border px-3 py-3 text-left transition ${
+                  form.provider === p
+                    ? 'border-accent/60 bg-accent-soft'
+                    : 'border-ink-700 bg-ink-900 hover:border-ink-600'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium capitalize">{p}</span>
+                  {form.provider === p && <span className="text-2xs text-accent">ACTIVE</span>}
+                </div>
+                <p className="mt-0.5 text-2xs text-muted">
+                  {p === 'twilio' ? 'Most reliable browser calling' : 'Half the per-minute price'}
+                </p>
+              </button>
+            ))}
+          </div>
+          {form.provider === 'telnyx' && (
+            <p className="mt-2 rounded border border-amber-900/40 bg-amber-950/20 px-2.5 py-1.5 text-2xs text-amber-300">
+              Telnyx calling is still being wired up. Keep Twilio selected for now.
+            </p>
+          )}
+        </section>
+
+        <section className={`panel p-4 ${form.provider !== 'twilio' ? 'opacity-60' : ''}`}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Twilio</h2>
+            <a
+              className="text-2xs text-muted hover:text-accent"
+              href="https://console.twilio.com"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Twilio console ↗
+            </a>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Account SID</label>
+              <input
+                className="field mono"
+                placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                value={form.twilio.accountSid}
+                onChange={(e) => setT('accountSid', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Auth Token</label>
+              <input
+                className="field mono"
+                type="password"
+                placeholder={form.twilio.authToken || 'paste once, then it is hidden'}
+                value={form.twilio.authToken?.startsWith('•') || form.twilio.authToken?.includes('•') ? '' : form.twilio.authToken}
+                onChange={(e) => setT('authToken', e.target.value)}
+              />
+              <p className="mt-1 text-2xs text-muted">Leave blank to keep the saved token.</p>
+            </div>
+            <div>
+              <label className="label">Caller ID number</label>
+              <input
+                className="field mono"
+                placeholder="+15125550100"
+                value={form.twilio.number}
+                onChange={(e) => setT('number', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">TwiML app (automatic)</label>
+              <input className="field mono text-muted" value={form.twilio.twimlApp || 'created when you save'} readOnly />
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center gap-2">
+            <button className="btn-ghost !py-1.5 text-xs" onClick={runTest}>
+              Test credentials
+            </button>
+            {test?.loading && <span className="text-2xs text-muted">Checking…</span>}
+            {test && !test.loading && (
+              <span className={`text-2xs ${test.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                {test.ok ? `Connected to "${test.account}" (${test.status})` : test.error}
+              </span>
+            )}
+          </div>
+
+          {test?.ok && test.numbers?.length > 0 && (
+            <div className="mt-2 rounded border border-ink-700 bg-ink-900 p-2">
+              <p className="mb-1 text-2xs uppercase tracking-wider text-muted">Numbers on this account</p>
+              <div className="flex flex-wrap gap-1.5">
+                {test.numbers.map((n: any) => (
+                  <button
+                    key={n.phone}
+                    onClick={() => setT('number', n.phone)}
+                    className="rounded border border-ink-700 px-2 py-1 mono text-2xs hover:border-accent/60"
+                  >
+                    {n.phone} {n.voice ? '' : '(no voice)'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className={`panel p-4 ${form.provider !== 'telnyx' ? 'opacity-60' : ''}`}>
+          <h2 className="text-sm font-semibold">Telnyx</h2>
+          <p className="mt-1 text-2xs text-muted">
+            Create an API key in the Telnyx portal, paste it here. The SIP connection is created automatically.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">API key</label>
+              <input
+                className="field mono"
+                type="password"
+                placeholder={form.telnyx.apiKey || 'KEYxxxxxxxxxxxx'}
+                value={form.telnyx.apiKey}
+                onChange={(e) => setX('apiKey', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Number</label>
+              <input className="field mono" value={form.telnyx.number} onChange={(e) => setX('number', e.target.value)} />
+            </div>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <h2 className="text-sm font-semibold">Calling</h2>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span>
+                Record calls
+                <span className="block text-2xs text-muted">Stored at the provider, played back through this app.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={form.recordingEnabled}
+                onChange={(e) => setForm({ ...form, recordingEnabled: e.target.checked })}
+                className="h-4 w-4 accent-[#22C55E]"
+              />
+            </label>
+
+            <div>
+              <label className="label">Ring timeout (seconds)</label>
+              <input
+                className="field !w-32 mono"
+                type="number"
+                min={10}
+                max={60}
+                value={form.ringTimeoutSec}
+                onChange={(e) => setForm({ ...form, ringTimeoutSec: Number(e.target.value) })}
+              />
+            </div>
+
+            <div>
+              <label className="label">Microphone</label>
+              <select
+                className="field"
+                value={dialer.inputDevice}
+                onChange={(e) => dialer.selectInputDevice(e.target.value)}
+                onFocus={() => dialer.refreshInputs()}
+              >
+                {dialer.inputDevices.length === 0 && <option value="">No microphones detected yet</option>}
+                {dialer.inputDevices.map((m) => (
+                  <option key={m.deviceId} value={m.deviceId}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-2xs text-muted">
+                Bluetooth headsets connected after page load show up here — pick one and it is used without a refresh.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

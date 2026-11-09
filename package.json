@@ -1,0 +1,14 @@
+{
+  "name": "daddy-dialer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Dark-industrial B2B power-dialer CRM",
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,cyan \"npm --prefix api run dev\" \"npm --prefix web run dev\"",
+    "build": "npm --prefix web run build && npm --prefix api run build",
+    "start": "npm --prefix api run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
