@@ -47,32 +47,6 @@ export function checkCallable(
     return { callable: true, localLabel: clock.label, timezone: tz };
   }
 
-  const days = String(settings?.call_window_days ?? '1,2,3,4,5')
-    .split(',')
-    .map((d) => Number(d.trim()))
-    .filter((d) => !Number.isNaN(d));
-
-  if (days.length && !days.includes(clock.weekday)) {
-    return {
-      callable: false,
-      reason: `Not a calling day (${clock.tz.split('/').pop()?.replace('_', ' ')} local time)`,
-      localLabel: clock.label,
-      timezone: tz,
-    };
-  }
-
-  const start = Number(settings?.call_window_start ?? 8);
-  const end = Number(settings?.call_window_end ?? 21);
-
-  if (clock.hour < start || clock.hour >= end) {
-    return {
-      callable: false,
-      reason: `Outside calling hours — it is ${clock.label} where they are (window ${start}:00–${end}:00)`,
-      localLabel: clock.label,
-      timezone: tz,
-    };
-  }
-
   const max = Number(settings?.max_attempts ?? 0);
   if (max > 0 && Number(lead.attempts || 0) >= max) {
     return {

@@ -290,26 +290,25 @@ the **lead's local time**. Press **Call now**.
 
 ### Compliance guard
 
-Every dial passes a server-side gate before it leaves the browser, and again
-when Twilio asks what to dial. Configure it in **Settings → Calling window**:
+There is **no time-of-day restriction** — you can dial at any hour. The guard
+enforces two things instead, in **Settings → Calling rules**:
 
 | Setting | Default | Effect |
 |---|---|---|
-| Enforce calling hours | on | Blocks dials outside the window |
-| Start / end hour | 08:00 – 21:00 | In the **lead's** timezone, not yours |
-| Calling days | Mon–Fri | Weekday check is also local |
-| Max attempts per lead | 0 (off) | Stops dialing after N tries |
-| Default timezone | America/New_York | Used when a lead has no state |
-
-Timezone comes from the lead's `state`, unless the lead has its own timezone or
-the workspace sets a default. States that span zones use their main zone — a
-lead can be corrected individually in the lead editor.
+| Max attempts per lead | 0 (off) | Stops dialing a number after N tries |
+| Default timezone | America/New_York | Used for local-time display when a lead has no state |
 
 **Do-not-call is always enforced**, whatever the settings say. A `do_not_call`
 outcome blocks the dial from the session, the lead list and the floating
-widget, and the API returns a clear reason instead of placing the call.
+widget, and the API returns a clear reason instead of placing the call. The same
+check runs again server-side when Twilio asks what to dial, so it cannot be
+bypassed from the browser.
 
-This is a guardrail, not legal advice: it does not check any DNC registry.
+The lead's local time is still shown on the dial card and on the callbacks list
+— it is information, not a restriction.
+
+This is a guardrail, not legal advice. It does not check any DNC registry, and
+you are responsible for calling at reasonable hours in the lead's timezone.
 
 ### Callbacks
 

@@ -458,67 +458,11 @@ export function Settings() {
         </section>
 
         <section className="panel p-4">
-          <h2 className="text-sm font-semibold">Calling window</h2>
+          <h2 className="text-sm font-semibold">Calling rules</h2>
           <p className="mt-1 text-xs text-muted">
-            Blocks dialing outside business hours in the lead's own timezone. Do-not-call leads are always blocked,
-            whatever this says.
+            Call at any hour — there is no time-of-day restriction. Do-not-call leads are always blocked, whatever
+            this says.
           </p>
-
-          <label className="mt-3 flex items-center justify-between gap-4 text-sm">
-            <span>
-              Enforce calling hours
-              <span className="block text-2xs text-muted">Server-side — the browser cannot bypass it.</span>
-            </span>
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-check"
-              checked={comp.enforce}
-              onChange={(e) => setComp({ enforce: e.target.checked })}
-            />
-          </label>
-
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Start hour</label>
-              <select className="field" value={comp.windowStart} onChange={(e) => setComp({ windowStart: Number(e.target.value) })}>
-                {Array.from({ length: 24 }, (_, h) => h).map((h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, '0')}:00
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">End hour (exclusive)</label>
-              <select className="field" value={comp.windowEnd} onChange={(e) => setComp({ windowEnd: Number(e.target.value) })}>
-                {Array.from({ length: 25 }, (_, h) => h).map((h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, '0')}:00
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <label className="label">Calling days</label>
-            <div className="flex flex-wrap gap-1">
-              {DAY_LABELS.map(([d, label]) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => toggleDay(d)}
-                  className={`rounded border px-2 py-1 text-xs transition ${
-                    days.includes(d)
-                      ? 'border-accent/60 bg-accent-soft text-accent'
-                      : 'border-ink-700 text-muted hover:text-zinc-200'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
