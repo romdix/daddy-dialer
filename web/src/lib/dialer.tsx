@@ -34,6 +34,48 @@ interface DialerValue {
 
 const Ctx = createContext<DialerValue>(null as any);
 
+/**
+ * Local ringback for the agent while the lead's phone rings. This is only a
+ * comfort cue — "connected" is decided by the server, and the tone is stopped
+ * the moment it reports the lead actually joined the room.
+ */
+class Ringback {
+  private ctx: AudioContext | null = null;
+  private nodes: OscillatorNode[] = [];
+  start() {
+    try {
+      if (this.ctx) return;
+      const AC = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.035;
+      gain.connect(this.ctx.destination);
+      for (const freq of [440, 480]) {
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        osc.start();
+        this.nodes.push(osc);
+      }
+    } catch {
+      /* audio is a nicety, never fatal */
+    }
+  }
+  stop() {
+    try {
+      this.nodes.forEach((n) => n.stop());
+      this.nodes = [];
+      this.ctx?.close();
+    } catch {
+      /* ignore */
+    }
+    this.ctx = null;
+  }
+}
+
+
 export function DialerProvider({ children, workspaceId }: { children: React.ReactNode; workspaceId: string }) {
   const qc = useQueryClient();
   const deviceRef = useRef<Device | null>(null);
@@ -42,6 +84,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const pollRef = useRef<any>(null);
   const pollFailures = useRef(0);
   const startingRef = useRef(false);
+  const ringback = useRef<Ringback>(new Ringback());
   const endedHandler = useRef<((c: StartedCall & { durationSec: number }) => void) | null>(null);
   const secondsRef = useRef(0);
   const liveRef = useRef(false);
@@ -55,6 +98,13 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const [error, setError] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [inputDevice, setInputDevice] = useState<string>(() => localStorage.getItem('dd.inputDevice') || '');
+
+  // Ringback follows real state: plays only while we wait for the lead, and dies
+  // the instant the server says they joined.
+  useEffect(() => {
+    if (status === 'ringing') ringback.current.start();
+    else ringback.current.stop();
+  }, [status]);
 
   const refreshInputs = useCallback(async () => {
     try {
