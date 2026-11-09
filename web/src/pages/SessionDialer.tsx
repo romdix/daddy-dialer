@@ -37,6 +37,7 @@ interface EndedCall {
   leadIndex: number;
   status: string;
   durationSec: number;
+  outcome: string | null;
   /** Unanswered calls can be auto-dispositioned so the queue keeps moving. */
   auto: boolean;
 }
@@ -168,7 +169,10 @@ export function SessionDialer() {
 
       const status = row?.status || '';
       const durationSec = Number(row?.duration_sec || le.durationSec || 0);
-      const auto = durationSec <= 0 && Boolean(AUTO_OUTCOME[status]);
+      // A voicemail detected by the server arrives with the outcome already set,
+      // so there is nothing to ask the rep.
+      const existingOutcome = row?.outcome || null;
+      const auto = Boolean(existingOutcome) || (durationSec <= 0 && Boolean(AUTO_OUTCOME[status]));
       const leadIndex = leadsRef.current.findIndex((l) => l.id === le.leadId);
 
       const info: EndedCall = {
@@ -177,12 +181,15 @@ export function SessionDialer() {
         leadIndex: leadIndex === -1 ? indexRef.current : leadIndex,
         status,
         durationSec,
+        outcome: existingOutcome,
         auto,
       };
       setEnded(info);
 
       if (auto) {
-        await api.patch(`/api/calls/${le.callLogId}/outcome`, { outcome: AUTO_OUTCOME[status] }).catch(() => {});
+        if (!existingOutcome) {
+          await api.patch(`/api/calls/${le.callLogId}/outcome`, { outcome: AUTO_OUTCOME[status] }).catch(() => {});
+        }
         setEnded(null);
         if (autoDialRef.current) {
           await advance(info.leadIndex);
@@ -427,9 +434,13 @@ export function SessionDialer() {
           {ended && ended.auto && (
             <div className="panel border-ink-700 p-4 text-xs text-muted">
               <span className="text-zinc-300">
-                {ended.status === 'busy' ? 'Line was busy' : 'No answer'}
+                {ended.outcome === 'voicemail'
+                  ? 'Voicemail detected'
+                  : ended.status === 'busy'
+                    ? 'Line was busy'
+                    : 'No answer'}
               </span>{' '}
-              — logged as <span className="mono">{AUTO_OUTCOME[ended.status]}</span>.
+              — logged as <span className="mono">{ended.outcome || AUTO_OUTCOME[ended.status]}</span>.
               <button className="ml-2 underline hover:text-zinc-300" onClick={() => advance(ended.leadIndex)}>
                 Next
               </button>
