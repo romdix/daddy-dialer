@@ -83,11 +83,21 @@ sessionsRouter.post(
       ]);
       const sessionId = s.rows[0].id as string;
 
+      // One row per phone number: the queue must never call the same business
+      // twice, even if the import contains the same number in two formats.
       const ins = await c.query(
-        `insert into session_leads (session_id, lead_id, queue_order)
+        `with picked as (
+           select distinct on (regexp_replace(phone,'\\D','','g'))
+                  id, business_name, last_called_at
+             from leads
+            where workspace_id = $2 ${where.sql} ${dnc}
+            order by regexp_replace(phone,'\\D','','g'),
+                     coalesce(last_called_at, 'epoch'::timestamptz) asc,
+                     business_name asc
+         )
+         insert into session_leads (session_id, lead_id, queue_order)
          select $1, id, row_number() over (order by coalesce(last_called_at, 'epoch'::timestamptz) asc, business_name asc)
-           from leads
-          where workspace_id = $2 ${where.sql} ${dnc}
+           from picked
           order by coalesce(last_called_at, 'epoch'::timestamptz) asc, business_name asc
           limit ${MAX_QUEUE}
          on conflict (session_id, lead_id) do nothing

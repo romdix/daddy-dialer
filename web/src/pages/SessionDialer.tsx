@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -30,6 +30,23 @@ interface Row {
   localLabel?: string;
 }
 
+/** What we know once a call has finished. */
+interface EndedCall {
+  callLogId: string;
+  leadId: string | null;
+  leadIndex: number;
+  status: string;
+  durationSec: number;
+  /** Unanswered calls can be auto-dispositioned so the queue keeps moving. */
+  auto: boolean;
+}
+
+const AUTO_OUTCOME: Record<string, string> = {
+  no_answer: 'no_answer',
+  canceled: 'no_answer',
+  busy: 'busy',
+};
+
 function localDatetimeValue(d: Date) {
   const off = d.getTimezoneOffset() * 60000;
   return new Date(d.getTime() - off).toISOString().slice(0, 16);
@@ -42,7 +59,7 @@ export function SessionDialer() {
   const dialer = useDialer();
 
   const [index, setIndex] = useState(0);
-  const [pendingCallLogId, setPendingCallLogId] = useState<string | null>(null);
+  const [ended, setEnded] = useState<EndedCall | null>(null);
   const [autoDial, setAutoDial] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [callbackFor, setCallbackFor] = useState<string | null>(null);
@@ -56,66 +73,139 @@ export function SessionDialer() {
   const leads = data?.leads || [];
   const current = leads[index];
 
+  // Keep the latest leads around for callbacks fired outside a render.
+  const leadsRef = useRef<Row[]>([]);
+  leadsRef.current = leads;
+  const indexRef = useRef(0);
+  indexRef.current = index;
+  const autoDialRef = useRef(false);
+  autoDialRef.current = autoDial;
+
   useEffect(() => {
     if (!leads.length) return;
     const firstPending = leads.findIndex((l) => l.queue_status === 'pending');
     setIndex(firstPending === -1 ? 0 : firstPending);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.session?.id]);
 
+  // Mark the session as running the first time it is opened.
   useEffect(() => {
-    if (!dialer.lastEnded) return;
-    if (dialer.lastEnded.sessionId !== id) return;
-    setPendingCallLogId(dialer.lastEnded.callLogId);
-  }, [dialer.lastEnded, id]);
+    if (!id || data?.session?.status === 'active' || data?.session?.status === 'completed') return;
+    api.patch(`/api/sessions/${id}`, { status: 'active' }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, data?.session?.status]);
 
-  const done = leads.filter((l) => l.queue_status === 'done').length;
-  const pct = leads.length ? Math.round((done / leads.length) * 100) : 0;
+  /** Dial a specific lead — never "whatever the current index happens to be". */
+  const startCall = useCallback(
+    async (lead: Row) => {
+      setToast(null);
+      try {
+        await dialer.start({
+          to: lead.phone,
+          leadId: lead.id,
+          sessionId: id!,
+          label: lead.business_name,
+        });
+      } catch (e: any) {
+        setToast(e?.message || 'Could not start the call');
+      }
+    },
+    [dialer, id],
+  );
 
-  const call = async () => {
-    if (!current) return;
-    try {
-      await dialer.start({
-        to: current.phone,
-        leadId: current.id,
-        sessionId: id!,
-        label: current.business_name,
-      });
-    } catch (e: any) {
-      setToast(e?.message || 'Could not start the call');
-    }
-  };
+  /** Move to the next still-pending lead and optionally dial it. */
+  const advance = useCallback(
+    async (fromIndex: number) => {
+      const res = await refetch();
+      const rows: Row[] = res.data?.leads || [];
+      leadsRef.current = rows;
 
-  const dispose = async (outcome: string) => {
-    if (!pendingCallLogId) return;
+      let target = rows.findIndex((l, i) => i > fromIndex && l.queue_status === 'pending');
+      if (target === -1) target = rows.findIndex((l) => l.queue_status === 'pending');
+
+      if (target === -1) {
+        setToast('Session complete — every lead in this queue has been dialed.');
+        if (id) api.patch(`/api/sessions/${id}`, { status: 'completed' }).catch(() => {});
+        return;
+      }
+
+      setIndex(target);
+      if (autoDialRef.current) {
+        const lead = rows[target];
+        setTimeout(() => startCall(lead), 1200);
+      }
+    },
+    [id, refetch, startCall],
+  );
+
+  const applyOutcome = useCallback(
+    async (call: EndedCall, outcome: string, cbAt?: string) => {
+      await api.patch(`/api/calls/${call.callLogId}/outcome`, { outcome });
+      if (cbAt && call.leadId) {
+        await api.patch(`/api/leads/${call.leadId}`, { callback_at: new Date(cbAt).toISOString() });
+      }
+      setEnded(null);
+      setCallbackFor(null);
+      setCallbackAt('');
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['calls'] });
+      qc.invalidateQueries({ queryKey: ['callbacks'] });
+      await advance(call.leadIndex);
+    },
+    [advance, qc],
+  );
+
+  // A call finished: work out what actually happened, then either auto-move on
+  // (no answer / busy) or ask the rep for a disposition (a real conversation).
+  useEffect(() => {
+    const le = dialer.lastEnded;
+    if (!le || le.sessionId !== id || !le.callLogId) return;
+
+    let cancelled = false;
+    (async () => {
+      const row = await api.get<any>(`/api/calls/${le.callLogId}`).catch(() => null);
+      if (cancelled) return;
+
+      const status = row?.status || '';
+      const durationSec = Number(row?.duration_sec || le.durationSec || 0);
+      const auto = durationSec <= 0 && Boolean(AUTO_OUTCOME[status]);
+      const leadIndex = leadsRef.current.findIndex((l) => l.id === le.leadId);
+
+      const info: EndedCall = {
+        callLogId: le.callLogId,
+        leadId: le.leadId || null,
+        leadIndex: leadIndex === -1 ? indexRef.current : leadIndex,
+        status,
+        durationSec,
+        auto,
+      };
+      setEnded(info);
+
+      if (auto) {
+        await api.patch(`/api/calls/${le.callLogId}/outcome`, { outcome: AUTO_OUTCOME[status] }).catch(() => {});
+        setEnded(null);
+        if (autoDialRef.current) {
+          await advance(info.leadIndex);
+        } else {
+          await refetch();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialer.lastEnded?.callLogId, id]);
+
+  const dispose = (outcome: string) => {
+    if (!ended) return;
     if (outcome === 'callback_requested' && !callbackAt) {
-      setCallbackFor(pendingCallLogId);
+      setCallbackFor(ended.callLogId);
       setCallbackAt(localDatetimeValue(new Date(Date.now() + 60 * 60 * 1000)));
       return;
     }
-    await applyOutcome(outcome, outcome === 'callback_requested' ? callbackAt : undefined);
-  };
-
-  const applyOutcome = async (outcome: string, cbAt?: string) => {
-    if (!pendingCallLogId) return;
-    await api.patch(`/api/calls/${pendingCallLogId}/outcome`, { outcome });
-    if (cbAt && current) {
-      await api.patch(`/api/leads/${current.id}`, { callback_at: new Date(cbAt).toISOString() });
-    }
-    setPendingCallLogId(null);
-    setCallbackFor(null);
-    setCallbackAt('');
-    const res = await refetch();
-    qc.invalidateQueries({ queryKey: ['dashboard'] });
-    qc.invalidateQueries({ queryKey: ['calls'] });
-    qc.invalidateQueries({ queryKey: ['callbacks'] });
-
-    const next = (res.data?.leads || []).findIndex((l: Row) => l.queue_status === 'pending');
-    if (next !== -1) {
-      setIndex(next);
-      if (autoDial) setTimeout(() => call(), 1200);
-    } else {
-      setToast('Session complete — every lead in this queue has been dialed.');
-    }
+    applyOutcome(ended, outcome, outcome === 'callback_requested' ? callbackAt : undefined);
   };
 
   const move = (delta: number) => {
@@ -125,10 +215,32 @@ export function SessionDialer() {
 
   const inCall = dialer.status === 'connecting' || dialer.status === 'ringing' || dialer.status === 'live';
   const blocked = current ? current.callable === false : false;
+  const done = leads.filter((l) => l.queue_status === 'done').length;
+  const pct = leads.length ? Math.round((done / leads.length) * 100) : 0;
 
   // Keyboard shortcuts — bound once, always calling the latest handlers.
-  const handlers = useRef({ call, hangup: () => dialer.hangup(), dispose, move, blocked, inCall, current });
-  handlers.current = { call, hangup: () => dialer.hangup(), dispose, move, blocked, inCall, current };
+  const handlers = useRef({
+    call: () => {},
+    hangup: () => {},
+    dispose: (_o: string) => {},
+    move: (_d: number) => {},
+    advance: () => {},
+    blocked: false,
+    inCall: false,
+    current: undefined as Row | undefined,
+    ended: null as EndedCall | null,
+  });
+  handlers.current = {
+    call: () => current && startCall(current),
+    hangup: () => dialer.hangup(),
+    dispose,
+    move,
+    advance: () => (ended ? advance(ended.leadIndex) : undefined),
+    blocked,
+    inCall,
+    current,
+    ended,
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -139,10 +251,11 @@ export function SessionDialer() {
       if (e.code === 'Space') {
         e.preventDefault();
         if (h.inCall) return h.hangup();
+        if (h.ended) return h.advance();
         if (!h.blocked && h.current) h.call();
         return;
       }
-      if (/^[1-9]$/.test(e.key)) {
+      if (/^[1-9]$/.test(e.key) && h.ended) {
         const outcome = QUICK_OUTCOMES[Number(e.key) - 1];
         if (outcome) h.dispose(outcome);
         return;
@@ -171,7 +284,7 @@ export function SessionDialer() {
           <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
         </div>
         <p className="mt-1.5 text-2xs text-muted">
-          Shortcuts: <span className="text-zinc-300">Space</span> call / hang up ·{' '}
+          Shortcuts: <span className="text-zinc-300">Space</span> call / hang up / next ·{' '}
           <span className="text-zinc-300">1–9</span> disposition · <span className="text-zinc-300">← →</span> move
         </p>
       </div>
@@ -235,8 +348,8 @@ export function SessionDialer() {
               </div>
 
               <div className="mt-5 flex flex-wrap items-center gap-2">
-                {!inCall && !pendingCallLogId && (
-                  <button className="btn-primary px-6" onClick={call} disabled={blocked}>
+                {!inCall && !ended && (
+                  <button className="btn-primary px-6" onClick={() => startCall(current)} disabled={blocked}>
                     {blocked ? 'Blocked' : 'Call now'}
                   </button>
                 )}
@@ -282,9 +395,14 @@ export function SessionDialer() {
             <div className="panel p-8 text-center text-sm text-muted">This queue is empty.</div>
           )}
 
-          {pendingCallLogId && callbackFor !== pendingCallLogId && (
+          {ended && !ended.auto && callbackFor !== ended.callLogId && (
             <div className="panel border-accent/30 p-4">
-              <p className="text-xs uppercase tracking-wider text-muted">How did it go?</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs uppercase tracking-wider text-muted">How did it go?</p>
+                <span className="mono text-2xs text-muted">
+                  {fmtDuration(ended.durationSec)} · {ended.status.replace('_', ' ')}
+                </span>
+              </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {QUICK_OUTCOMES.map((o, i) => (
                   <button
@@ -297,10 +415,28 @@ export function SessionDialer() {
                   </button>
                 ))}
               </div>
+              <button
+                className="mt-3 text-2xs text-muted underline hover:text-zinc-300"
+                onClick={() => advance(ended.leadIndex)}
+              >
+                Skip without a disposition
+              </button>
             </div>
           )}
 
-          {pendingCallLogId && callbackFor === pendingCallLogId && (
+          {ended && ended.auto && (
+            <div className="panel border-ink-700 p-4 text-xs text-muted">
+              <span className="text-zinc-300">
+                {ended.status === 'busy' ? 'Line was busy' : 'No answer'}
+              </span>{' '}
+              — logged as <span className="mono">{AUTO_OUTCOME[ended.status]}</span>.
+              <button className="ml-2 underline hover:text-zinc-300" onClick={() => advance(ended.leadIndex)}>
+                Next
+              </button>
+            </div>
+          )}
+
+          {ended && callbackFor === ended.callLogId && (
             <div className="panel border-accent/30 p-4">
               <p className="text-xs uppercase tracking-wider text-muted">When should we call back?</p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -312,7 +448,7 @@ export function SessionDialer() {
                 />
                 <button
                   className="btn-primary !py-1.5 text-xs"
-                  onClick={() => applyOutcome('callback_requested', callbackAt)}
+                  onClick={() => applyOutcome(ended, 'callback_requested', callbackAt)}
                 >
                   Save callback
                 </button>
