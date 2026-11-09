@@ -77,8 +77,26 @@ export const twilioProvider: DialerProvider = {
       identity,
       ttl: 3600,
     });
-    token.addGrant(new VoiceGrant({ outgoingApplicationSid: s.twilio_twiml_app, incomingAllow: false }));
+    token.addGrant(new VoiceGrant({ outgoingApplicationSid: s.twilio_twiml_app, incomingAllow: true }));
     return { token: token.toJwt(), identity };
+  },
+
+  /** Point one of the account's numbers at our inbound handler. */
+  async pointNumberAtInbound(s, number, publicUrl) {
+    const c = client(s);
+    const list = await c.incomingPhoneNumbers.list({ phoneNumber: number, limit: 1 });
+    if (!list.length) return { ok: false, reason: 'not-on-account' };
+    await c.incomingPhoneNumbers(list[0].sid).update({
+      voiceUrl: `${publicUrl}/api/voice/inbound`,
+      voiceMethod: 'POST',
+    });
+    return { ok: true, sid: list[0].sid };
+  },
+
+  /** Hang up a single call leg (used when a machine answers). */
+  async endCall(s, callSid) {
+    const c = client(s);
+    await c.calls(callSid).update({ status: 'completed' });
   },
 
   /**
@@ -133,6 +151,12 @@ export const twilioProvider: DialerProvider = {
       statusCallback: `${o.publicUrl}/api/voice/status?${qs}`,
       statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
       statusCallbackMethod: 'POST',
+      // Asynchronous detection: the call proceeds normally while Twilio listens,
+      // and reports "human" vs "machine" a few seconds later. No dead air.
+      machineDetection: 'Enable',
+      asyncAmd: 'true',
+      asyncAmdStatusCallback: `${o.publicUrl}/api/voice/amd?${qs}`,
+      asyncAmdStatusCallbackMethod: 'POST',
     });
     return { sid: call.sid };
   },

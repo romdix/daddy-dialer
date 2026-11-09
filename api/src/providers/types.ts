@@ -38,6 +38,8 @@ export interface DialerProvider {
   /** Conference-based calling (Twilio). The agent joins, then the lead is dialed in. */
   agentMarkup?(r: OutboundRequest, publicUrl: string): string;
   leadMarkup?(r: OutboundRequest): string;
+  pointNumberAtInbound?(s: ProviderSettings, number: string, publicUrl: string): Promise<{ ok: boolean; reason?: string; sid?: string }>;
+  endCall?(s: ProviderSettings, callSid: string): Promise<void>;
   dialIntoConference?(
     s: ProviderSettings,
     o: {

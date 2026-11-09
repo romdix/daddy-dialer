@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { DialerProvider } from '../lib/dialer';
+import { DialerProvider, useDialer } from '../lib/dialer';
 import { BrandMark, useBrand } from '../lib/brand';
 import { PhoneWidget } from './PhoneWidget';
 
@@ -65,8 +65,32 @@ export function Shell() {
         </main>
 
         <PhoneWidget />
+        <IncomingBanner />
       </div>
     </DialerProvider>
+  );
+}
+
+/** Rings in the browser when someone calls one of the workspace numbers. */
+function IncomingBanner() {
+  const d = useDialer();
+  if (!d.incoming) return null;
+  return (
+    <div className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-4">
+      <div className="panel flex w-full max-w-md items-center gap-3 border-accent/40 bg-ink-900 p-4 shadow-2xl">
+        <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" />
+        <div className="min-w-0 flex-1">
+          <p className="text-2xs uppercase tracking-wider text-muted">Incoming call</p>
+          <p className="mono truncate text-sm">{d.incoming.from || 'Unknown number'}</p>
+        </div>
+        <button className="btn-ghost !py-1.5 text-xs" onClick={d.declineIncoming}>
+          Decline
+        </button>
+        <button className="btn-primary !py-1.5 text-xs" onClick={() => d.answerIncoming()}>
+          Answer
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useDialer } from '../lib/dialer';
 import { DialPad } from './DialPad';
 import { fmtDuration } from '../lib/format';
+import { api } from '../lib/api';
 
 /**
  * The floating dial-anything widget. The keypad stays mounted for the whole
@@ -34,6 +36,10 @@ export function PhoneWidget() {
   const [open, setOpen] = useState(false);
   const [number, setNumber] = useState('');
   const [showMics, setShowMics] = useState(false);
+  const { data: callerIds } = useQuery<{ rows: { id: string; number: string; label: string | null; active: boolean }[] }>({
+    queryKey: ['caller-ids'],
+    queryFn: () => api.get('/api/caller-ids'),
+  });
 
   const inCall = d.status === 'connecting' || d.status === 'ringing' || d.status === 'live';
   const statusText =
@@ -125,6 +131,27 @@ export function PhoneWidget() {
             </div>
 
             <DialPad onKey={press} compact />
+
+            {!inCall && (
+              <div className="mt-2 flex items-center gap-1.5">
+                <span className="shrink-0 text-2xs uppercase tracking-wider text-muted">From</span>
+                <select
+                  className="field flex-1 !py-1 !text-2xs"
+                  value={d.callerId}
+                  onChange={(e) => d.setCallerId(e.target.value)}
+                >
+                  <option value="">Rotate automatically</option>
+                  {(callerIds?.rows || [])
+                    .filter((c) => c.active)
+                    .map((c) => (
+                      <option key={c.id} value={c.number}>
+                        {c.number}
+                        {c.label ? ` · ${c.label}` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
             <div className="mt-3 flex items-center gap-2">
               {!inCall ? (

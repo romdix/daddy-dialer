@@ -12,6 +12,9 @@ export const voiceRouter = Router();
 
 const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v || '');
 
+const xmlEscape = (v: string) =>
+  String(v).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c] as string));
+
 async function loadSettings(ws: string): Promise<ProviderSettings> {
   const s = await one<any>(`select * from settings where workspace_id=$1`, [ws]);
   if (!s) throw Object.assign(new Error('Workspace settings missing'), { status: 400 });
@@ -52,6 +55,33 @@ async function ensureTwimlApp(ws: string, s: ProviderSettings, req: any): Promis
     console.error('[twilio] twiml app setup failed:', e?.message);
   }
   return s;
+}
+
+/** Choose which number to call from: an explicit pick, else rotate by least-recent use. */
+async function pickCallerId(ws: string, fallback: string | null, preferred?: string): Promise<string | null> {
+  if (preferred) {
+    const norm = normalizePhone(preferred);
+    if (norm) {
+      const want = toE164(norm);
+      const hit = await one<any>(`select number from caller_ids where workspace_id=$1 and number=$2 and active`, [ws, want]);
+      if (hit) {
+        await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, hit.number]);
+        return hit.number;
+      }
+    }
+  }
+  const next = await one<any>(
+    `select number from caller_ids
+      where workspace_id=$1 and active
+      order by last_used_at asc nulls first, created_at asc
+      limit 1`,
+    [ws],
+  );
+  if (next) {
+    await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, next.number]);
+    return next.number;
+  }
+  return fallback;
 }
 
 /** Read-only health check for the voice setup. Returns no secrets. */
@@ -137,13 +167,16 @@ voiceRouter.post(
     const s = await loadSettings(ws);
     const p = ensureConfigured(s);
     const numbers = p.numbers(s);
-    if (!numbers.length) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
+
+    // Pick the caller ID first (explicit choice or rotation), then fall back.
+    const fromNumber = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''));
+    if (!fromNumber) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
     const row = await one<any>(
       `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at)
        values ($1,$2,$3,$4,$5,$6,'queued', now())
        returning id`,
-      [ws, req.body?.leadId || null, req.body?.sessionId || null, p.id, numbers[0], toE164(norm)],
+      [ws, req.body?.leadId || null, req.body?.sessionId || null, p.id, fromNumber, toE164(norm)],
     );
 
     const signing = await ensureTwimlApp(ws, await ensureApiKey(ws, s), req);
@@ -154,7 +187,7 @@ voiceRouter.post(
         ws,
       ]);
     }
-    res.json({ callLogId: row!.id, ...creds, provider: p.id, fromNumber: numbers[0] });
+    res.json({ callLogId: row!.id, ...creds, provider: p.id, fromNumber });
   }),
 );
 
@@ -366,7 +399,7 @@ voiceRouter.get(
     if (!isUuid(callLogId)) return res.status(400).json({ error: 'Bad call id' });
 
     const row = await one<any>(
-      `select id, status, duration_sec, connected_at, ended_at, error,
+      `select id, status, duration_sec, connected_at, ended_at, error, outcome, answered_by,
               extract(epoch from (now()-connected_at))::int as elapsed
          from call_logs where id=$1 and workspace_id=$2`,
       [callLogId, ws],
@@ -378,8 +411,152 @@ voiceRouter.get(
       connected: Boolean(row.connected_at),
       ended: Boolean(row.ended_at),
       elapsedSec: Math.max(0, row.elapsed || 0),
+      outcome: row.outcome || null,
+      answeredBy: row.answered_by || null,
       error: row.error || null,
     });
+  }),
+);
+
+/**
+ * Inbound call: Twilio dials this when someone calls one of the workspace's
+ * numbers. We log it and ring every member's browser.
+ */
+voiceRouter.post(
+  '/inbound',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const xml = (s: string) => res.type('text/xml').send(s);
+    const to = toE164(normalizePhone(String(b.To || '')) || '');
+    const from = String(b.From || '');
+    if (!to) return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>');
+
+    const owner =
+      (await one<any>(`select workspace_id from caller_ids where number=$1 limit 1`, [to])) ||
+      (await one<any>(`select workspace_id from settings where twilio_number=$1 limit 1`, [to]));
+    if (!owner) {
+      console.log('[voice] inbound for unclaimed number', to);
+      return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>');
+    }
+    const ws = owner.workspace_id as string;
+
+    // Attach the call to a lead — create one if this caller is new.
+    const normFrom = normalizePhone(from) || '';
+    let lead = normFrom
+      ? await one<any>(
+          `select id, business_name from leads
+            where workspace_id=$1 and regexp_replace(phone,'\D','','g')=$2 limit 1`,
+          [ws, normFrom],
+        )
+      : null;
+    if (!lead && normFrom) {
+      lead = await one<any>(
+        `insert into leads (workspace_id, business_name, phone, status, notes)
+         values ($1,$2,$3,'new','Created from an inbound call') returning id, business_name`,
+        [ws, from || 'Inbound caller', from],
+      );
+    }
+
+    const row = await one<any>(
+      `insert into call_logs (workspace_id, lead_id, provider, from_number, to_number, direction, status, called_at)
+       values ($1,$2,'twilio',$3,$4,'inbound','ringing', now()) returning id`,
+      [ws, lead?.id || null, from, to],
+    );
+
+    const members = await q<{ user_id: string }>(`select user_id from workspace_members where workspace_id=$1`, [ws]);
+    const base = baseUrl(req);
+    const qs = `callLogId=${encodeURIComponent(row!.id)}&amp;workspaceId=${encodeURIComponent(ws)}`;
+    const clients = members
+      .map(
+        (m) =>
+          `<Client><Identity>${xmlEscape(m.user_id)}</Identity><Parameter name="callLogId" value="${xmlEscape(
+            row!.id,
+          )}"/></Client>`,
+      )
+      .join('');
+
+    console.log('[voice] inbound', row!.id.slice(0, 8), 'from', from, 'to', to, 'members', members.length);
+
+    if (!clients) {
+      return xml(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Nobody is available to take your call right now. Goodbye.</Say></Response>`,
+      );
+    }
+
+    xml(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial timeout="25" answerOnBridge="true" callerId="${xmlEscape(from)}"
+        action="${base}/api/voice/inbound-done?${qs}" method="POST">
+    ${clients}
+  </Dial>
+</Response>`);
+  }),
+);
+
+/** Called when the inbound <Dial> finishes — nobody picked up, or the call ended. */
+voiceRouter.post(
+  '/inbound-done',
+  wrap(async (req, res) => {
+    const callLogId = String(req.query.callLogId || req.body.callLogId || '');
+    const b = req.body || {};
+    const st = String(b.DialCallStatus || '').toLowerCase();
+    const duration = Number(b.DialCallDuration || 0) || 0;
+    const status =
+      st === 'completed' ? 'completed' : st === 'no-answer' ? 'no_answer' : st === 'busy' ? 'busy' : st === 'failed' ? 'failed' : 'canceled';
+
+    if (isUuid(callLogId)) {
+      await q(
+        `update call_logs set status=$2, duration_sec=greatest(duration_sec,$3),
+                ended_at=coalesce(ended_at, now()),
+                connected_at=coalesce(connected_at, case when $2='completed' then now() else null end)
+          where id=$1`,
+        [callLogId, status, duration],
+      );
+    }
+    res.type('text/xml').send(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, nobody is available to take your call. Please try again later.</Say></Response>',
+    );
+  }),
+);
+
+/** Async answering-machine detection result. */
+voiceRouter.post(
+  '/amd',
+  wrap(async (req, res) => {
+    res.sendStatus(204);
+    const callLogId = String(req.query.callLogId || req.body.callLogId || '');
+    if (!isUuid(callLogId)) return;
+    const b = req.body || {};
+    const answeredBy = String(b.AnsweredBy || '');
+    if (!answeredBy) return;
+    console.log('[voice] amd', callLogId.slice(0, 8), answeredBy);
+
+    const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+    if (!call) return;
+
+    if (/^machine_|^fax/i.test(answeredBy)) {
+      // A machine answered: log it as a voicemail and drop the leg so the agent
+      // is not stuck listening to a greeting.
+      await q(`update call_logs set answered_by=$2, outcome=coalesce(outcome,'voicemail') where id=$1`, [
+        callLogId,
+        answeredBy,
+      ]);
+      if (call.lead_id) {
+        await q(`update leads set outcome='voicemail', status='in_progress', updated_at=now() where id=$1`, [call.lead_id]);
+      }
+      try {
+        const s = await loadSettings(call.workspace_id);
+        const p = getProvider(call.provider);
+        if (p.endCall && String(call.lead_call_sid || '').startsWith('CA')) {
+          await p.endCall(s, call.lead_call_sid);
+        }
+      } catch (e: any) {
+        console.error('[voice] amd hangup failed', e?.message);
+      }
+      return;
+    }
+
+    await q(`update call_logs set answered_by=$2 where id=$1`, [callLogId, answeredBy]);
   }),
 );
 

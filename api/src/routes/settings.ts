@@ -138,6 +138,16 @@ settingsRouter.put(
       ],
     );
 
+    // Keep the caller-ID list in step with the number saved in Settings.
+    const savedNumber = (t.number ?? current?.twilio_number ?? null) || null;
+    if (savedNumber) {
+      await q(
+        `insert into caller_ids (workspace_id, number) values ($1,$2)
+         on conflict (workspace_id, number) do nothing`,
+        [ws, savedNumber],
+      );
+    }
+
     // Make sure the TwiML app exists and points at this deployment.
     let appSid = current?.twilio_twiml_app || null;
     let appError: string | null = null;

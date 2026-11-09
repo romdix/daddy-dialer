@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
+import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { useDialer } from '../lib/dialer';
 import { useAuth } from '../lib/auth';
 import { useBrand, onAccent } from '../lib/brand';
@@ -295,6 +296,8 @@ export function Settings() {
             domains and calls keep working.
           </p>
         </section>
+
+        <CallerIdsPanel />
 
         <section className="panel p-4">
           <h2 className="text-sm font-semibold">Phone provider</h2>

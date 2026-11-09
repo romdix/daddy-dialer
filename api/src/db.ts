@@ -37,7 +37,7 @@ export async function tx<T>(fn: (c: any) => Promise<T>): Promise<T> {
 
 export async function migrate() {
   const dir = path.join(__dirname, 'sql');
-  for (const file of ['schema.sql', 'brand.sql', 'compliance.sql']) {
+  for (const file of ['schema.sql', 'brand.sql', 'compliance.sql', 'callerids.sql']) {
     const sql = fs.readFileSync(path.join(dir, file), 'utf8');
     await pool.query(sql);
   }

@@ -21,7 +21,7 @@ interface DialerValue {
   seconds: number;
   error: string | null;
   clearError: () => void;
-  start: (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference' }) => Promise<string>;
+  start: (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference'; callerId?: string }) => Promise<string>;
   hangup: () => void;
   toggleMute: () => void;
   sendDigit: (d: string) => void;
@@ -30,6 +30,15 @@ interface DialerValue {
   refreshInputs: () => Promise<void>;
   selectInputDevice: (deviceId: string) => Promise<void>;
   setEndedHandler: (fn: ((c: StartedCall & { durationSec: number }) => void) | null) => void;
+  /** Inbound call ringing the browser right now. */
+  incoming: { from: string; callLogId: string } | null;
+  answerIncoming: () => Promise<void>;
+  declineIncoming: () => void;
+  /** Preferred caller ID ('' = rotate automatically). */
+  callerId: string;
+  setCallerId: (v: string) => void;
+  /** The number the current/last call was placed from. */
+  activeFrom: string;
 }
 
 const Ctx = createContext<DialerValue>(null as any);
@@ -98,6 +107,86 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const [error, setError] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [inputDevice, setInputDevice] = useState<string>(() => localStorage.getItem('dd.inputDevice') || '');
+  const [incoming, setIncoming] = useState<{ from: string; callLogId: string } | null>(null);
+  const [callerId, setCallerIdState] = useState<string>(() => localStorage.getItem('dd.callerId') || '');
+  const [activeFrom, setActiveFrom] = useState<string>('');
+  const incomingRef = useRef<any>(null);
+
+  const setCallerId = useCallback((v: string) => {
+    setCallerIdState(v);
+    localStorage.setItem('dd.callerId', v);
+  }, []);
+
+  /**
+   * One Device for the whole session. Created on page load so inbound calls can
+   * ring even if the agent never dials, and reused for outbound.
+   */
+  const ensureDevice = useCallback(async (token: string) => {
+    if (deviceRef.current) {
+      try {
+        await deviceRef.current.updateToken(token);
+      } catch {
+        /* next call retries */
+      }
+      return deviceRef.current;
+    }
+
+    const device = new Device(token, { logLevel: 'error' as any, closeProtection: true });
+    device.on('error', (e: any) => setError(e?.message || 'Calling device error'));
+    device.on('tokenWillExpire', async () => {
+      try {
+        const fresh = await api.get<{ token: string }>('/api/voice/token');
+        await device.updateToken(fresh.token);
+      } catch {
+        /* next call fetches a new one anyway */
+      }
+    });
+
+    // Someone is calling one of our numbers.
+    device.on('incoming', (call: any) => {
+      incomingRef.current = call;
+      const from = call.parameters?.From || 'Unknown number';
+      const callLogId = call.customParameters?.get?.('callLogId') || '';
+      setIncoming({ from, callLogId });
+      call.on('cancel', () => {
+        incomingRef.current = null;
+        setIncoming(null);
+      });
+      call.on('disconnect', () => {
+        incomingRef.current = null;
+        setIncoming(null);
+        qc.invalidateQueries({ queryKey: ['calls'] });
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+      });
+    });
+
+    deviceRef.current = device;
+    if (inputDevice) {
+      try {
+        await device.audio?.setInputDevice(inputDevice);
+      } catch {
+        /* device not ready; retried after registration */
+      }
+    }
+    return device;
+  }, [inputDevice, qc]);
+
+  // Register on load so inbound calls work without placing an outbound first.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await api.get<{ token: string }>('/api/voice/token');
+        if (!cancelled) await ensureDevice(t.token);
+      } catch {
+        /* voice not configured yet — nothing to do */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Ringback follows real state: plays only while we wait for the lead, and dies
   // the instant the server says they joined.
@@ -222,7 +311,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   );
 
   const start = useCallback(
-    async (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference' }) => {
+    async (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference'; callerId?: string }) => {
       setError(null);
       // Guards against a double click: callRef only becomes set once connect()
       // resolves, so without this two fast clicks could dial twice.
@@ -232,13 +321,15 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       const started = await api
         .post<{ callLogId: string; token: string; identity: string; provider: string; fromNumber: string }>(
           '/api/voice/start',
-          { to: o.to, leadId: o.leadId, sessionId: o.sessionId, mode: o.mode || 'conference' },
+          { to: o.to, leadId: o.leadId, sessionId: o.sessionId, mode: o.mode || 'conference', callerId: o.callerId || callerId || undefined },
         )
         .catch((e: any) => {
           startingRef.current = false;
           setStatus('idle');
           throw e;
         });
+
+      setActiveFrom(started.fromNumber || '');
 
       const info: StartedCall = { callLogId: started.callLogId, to: o.to, label: o.label, leadId: o.leadId, sessionId: o.sessionId };
       activeRef.current = info;
@@ -248,33 +339,9 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       setSeconds(0);
       setStatus('connecting');
 
-      if (!deviceRef.current) {
-        const device = new Device(started.token, { logLevel: 'error' as any, closeProtection: true });
-        device.on('error', (e: any) => {
-          setError(e?.message || 'Calling device error');
-          setStatus('idle');
-        });
-        device.on('tokenWillExpire', async () => {
-          try {
-            const fresh = await api.get<{ token: string }>('/api/voice/token');
-            await device.updateToken(fresh.token);
-          } catch {
-            /* next call fetches a new one anyway */
-          }
-        });
-        deviceRef.current = device;
-        if (inputDevice) {
-          try {
-            await device.audio?.setInputDevice(inputDevice);
-          } catch {
-            /* device not ready; retried after registration */
-          }
-        }
-      } else {
-        await deviceRef.current.updateToken(started.token);
-      }
+      const device = await ensureDevice(started.token);
 
-      const call = await deviceRef.current
+      const call = await device
         .connect({
           params: { callLogId: started.callLogId, workspaceId },
         })
@@ -307,7 +374,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
 
       return started.callLogId;
     },
-    [beginPolling, finish, inputDevice, workspaceId],
+    [beginPolling, callerId, ensureDevice, finish, inputDevice, workspaceId],
   );
 
   const hangup = useCallback(() => {
@@ -333,6 +400,45 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
     endedHandler.current = fn;
   }, []);
 
+  /** Pick up an inbound call that is ringing in the browser. */
+  const answerIncoming = useCallback(async () => {
+    const c = incomingRef.current;
+    if (!c) return;
+    const callLogId = c.customParameters?.get?.('callLogId') || incoming?.callLogId || '';
+    try {
+      await c.accept();
+    } catch (e: any) {
+      setError(e?.message || 'Could not answer the call');
+      return;
+    }
+    incomingRef.current = null;
+    setIncoming(null);
+
+    const info: StartedCall = { callLogId, to: c.parameters?.From || 'inbound', label: 'Inbound call' };
+    activeRef.current = info;
+    setActive(info);
+    liveRef.current = true;
+    secondsRef.current = 0;
+    setSeconds(0);
+    setStatus('live');
+    cleanupTimer();
+    timer.current = setInterval(() => {
+      secondsRef.current += 1;
+      setSeconds(secondsRef.current);
+    }, 1000);
+    c.on('disconnect', () => finish('completed', callLogId));
+  }, [finish, incoming]);
+
+  const declineIncoming = useCallback(() => {
+    try {
+      incomingRef.current?.reject();
+    } catch {
+      /* ignore */
+    }
+    incomingRef.current = null;
+    setIncoming(null);
+  }, []);
+
   const value = useMemo<DialerValue>(
     () => ({
       status,
@@ -351,8 +457,14 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       refreshInputs,
       selectInputDevice,
       setEndedHandler,
+      incoming,
+      answerIncoming,
+      declineIncoming,
+      callerId,
+      setCallerId,
+      activeFrom,
     }),
-    [status, active, lastEnded, muted, seconds, error, start, hangup, toggleMute, sendDigit, inputDevices, inputDevice, refreshInputs, selectInputDevice, setEndedHandler],
+    [status, active, lastEnded, muted, seconds, error, start, hangup, toggleMute, sendDigit, inputDevices, inputDevice, refreshInputs, selectInputDevice, setEndedHandler, incoming, answerIncoming, declineIncoming, callerId, setCallerId, activeFrom],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

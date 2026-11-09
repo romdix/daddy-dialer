@@ -13,6 +13,7 @@ import { dashboardRouter } from './routes/dashboard';
 import { settingsRouter } from './routes/settings';
 import { brandRouter } from './routes/brand';
 import { voiceRouter } from './routes/voice';
+import { callerIdsRouter } from './routes/callerids';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -38,6 +39,7 @@ app.use('/api/calls', callsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/brand', brandRouter);
+app.use('/api/caller-ids', callerIdsRouter);
 app.use('/api/voice', voiceRouter);
 
 // Built frontend (production / docker)
