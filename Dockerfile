@@ -1,16 +1,19 @@
 # ---- 1. build the frontend -------------------------------------------------
 FROM node:22-alpine AS web
 WORKDIR /app/web
+# Coolify injects NODE_ENV=production into builds; force dev deps so vite exists.
+ENV NODE_ENV=development
 COPY web/package.json web/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+RUN npm install --production=false --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
 # ---- 2. build the API -------------------------------------------------------
 FROM node:22-alpine AS api-build
 WORKDIR /app/api
+ENV NODE_ENV=development
 COPY api/package.json api/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+RUN npm install --production=false --no-audit --no-fund
 COPY api/tsconfig.json ./
 COPY api/src ./src
 RUN npm run build
