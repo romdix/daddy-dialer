@@ -32,6 +32,18 @@ export function Settings() {
   const [bAccent, setBAccent] = useState(brand.accent);
   const [bLogo, setBLogo] = useState(brand.logoUrl || '');
   const [brandMsg, setBrandMsg] = useState<string | null>(null);
+  const [resyncMsg, setResyncMsg] = useState<string | null>(null);
+
+  const resyncTwilio = async () => {
+    setResyncMsg('Working…');
+    try {
+      const r = await api.post<any>('/api/settings/resync');
+      setResyncMsg(`Twilio now points at ${r.url}`);
+    } catch (e: any) {
+      setResyncMsg(e?.message || 'Could not update Twilio');
+    }
+    setTimeout(() => setResyncMsg(null), 6000);
+  };
 
   useEffect(() => {
     setBName(brand.name);
@@ -175,6 +187,40 @@ export function Settings() {
               <p className="text-2xs text-muted">Preview — this is what the sidebar and login screen will show.</p>
             </div>
           </div>
+        </section>
+
+        <section className="panel p-4">
+          <h2 className="text-sm font-semibold">Domain &amp; address</h2>
+          <p className="mt-1 text-xs text-muted">
+            Domains are handled by your host (Coolify), not by this app. The app answers on whatever domain reaches
+            it, so you can point several at once.
+          </p>
+
+          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <div className="rounded border border-ink-700 bg-ink-900 px-3 py-2">
+              <dt className="text-2xs uppercase tracking-wider text-muted">You are on</dt>
+              <dd className="mono mt-0.5 truncate">{typeof window !== 'undefined' ? window.location.origin : '—'}</dd>
+            </div>
+            <div className="rounded border border-ink-700 bg-ink-900 px-3 py-2">
+              <dt className="text-2xs uppercase tracking-wider text-muted">Twilio calls back to</dt>
+              <dd className="mono mt-0.5 truncate">{brand.canonicalUrl || '—'}/api/voice/twiml</dd>
+            </div>
+          </dl>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn-ghost !py-1.5 text-xs" onClick={resyncTwilio}>
+              Re-sync Twilio address
+            </button>
+            {resyncMsg && <span className="text-2xs text-accent">{resyncMsg}</span>}
+          </div>
+
+          <p className="mt-3 text-2xs leading-relaxed text-muted">
+            Add domains in Coolify under <span className="text-zinc-300">Domains</span> — separate several with a
+            comma. If you set the <span className="mono text-zinc-300">PUBLIC_URL</span> environment variable, Twilio
+            always uses that one fixed address; leave it unset and Twilio follows whichever domain you were on when
+            you saved Settings. Hit <span className="text-zinc-300">Re-sync Twilio address</span> after changing
+            domains and calls keep working.
+          </p>
         </section>
 
         <section className="panel p-4">

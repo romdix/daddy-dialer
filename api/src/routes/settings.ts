@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { one, q } from '../db';
 import { enc, dec, mask } from '../crypto';
-import { config } from '../config';
 import { requireAuth, wrap } from '../middleware';
 import { getProvider } from '../providers';
+import { baseUrl } from '../baseurl';
 import type { ProviderId } from '../providers/types';
 
 export const settingsRouter = Router();
@@ -112,7 +112,7 @@ settingsRouter.put(
             twilio_number: fresh.twilio_number,
             twilio_twiml_app: fresh.twilio_twiml_app,
           },
-          config.publicUrl,
+          baseUrl(req),
           brand?.name,
         );
         if (appSid) await q(`update settings set twilio_twiml_app=$2 where workspace_id=$1`, [ws, appSid]);
@@ -123,6 +123,37 @@ settingsRouter.put(
 
     const s = await loadRow(ws);
     res.json({ ...publicView(s), appError });
+  }),
+);
+
+settingsRouter.post(
+  '/resync',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const s = await loadRow(ws);
+    if (!s?.twilio_account_sid || !s?.twilio_auth_token) {
+      return res.status(400).json({ error: 'Add your Twilio credentials first.' });
+    }
+    const brand = await one<{ name: string }>(`select name from app_brand where id=1`);
+    const url = `${baseUrl(req)}/api/voice/twiml`;
+    try {
+      const appSid = await getProvider('twilio').ensureApp(
+        {
+          provider: 'twilio',
+          twilio_account_sid: s.twilio_account_sid,
+          twilio_auth_token: dec(s.twilio_auth_token),
+          twilio_number: s.twilio_number,
+          twilio_twiml_app: s.twilio_twiml_app,
+        },
+        baseUrl(req),
+        brand?.name,
+      );
+      if (appSid) await q(`update settings set twilio_twiml_app=$2 where workspace_id=$1`, [ws, appSid]);
+      res.json({ ok: true, url, appSid });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, error: e?.message || 'Could not update the Twilio app' });
+    }
   }),
 );
 

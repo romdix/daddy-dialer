@@ -6,6 +6,8 @@ export interface Brand {
   accent: string;
   logoUrl: string | null;
   supportEmail: string | null;
+  customized?: boolean;
+  canonicalUrl?: string | null;
 }
 
 const DEFAULT_BRAND: Brand = {

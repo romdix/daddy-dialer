@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { one, q } from '../db';
 import { requireAuth, wrap } from '../middleware';
+import { baseUrl } from '../baseurl';
+import { config } from '../config';
 
 export const brandRouter = Router();
 
@@ -20,7 +22,7 @@ const DEFAULTS: BrandRow = {
   support_email: null,
 };
 
-function shape(r: Partial<BrandRow> | null) {
+function shape(r: Partial<BrandRow> | null, req?: any) {
   const b = { ...DEFAULTS, ...(r || {}) };
   return {
     name: b.name,
@@ -28,16 +30,20 @@ function shape(r: Partial<BrandRow> | null) {
     accent: b.accent,
     logoUrl: b.logo_url || null,
     supportEmail: b.support_email || null,
+    customized: Boolean((r as any)?.is_customized),
+    canonicalUrl: req ? baseUrl(req) : config.publicUrl || null,
   };
 }
 
 /** Public — the login screen needs branding before anyone signs in. */
 brandRouter.get(
   '/',
-  wrap(async (_req, res) => {
-    const row = await one<BrandRow>(`select name, initials, accent, logo_url, support_email from app_brand where id=1`);
+  wrap(async (req, res) => {
+    const row = await one<BrandRow>(
+      `select name, initials, accent, logo_url, support_email, is_customized from app_brand where id=1`,
+    );
     res.setHeader('Cache-Control', 'no-store');
-    res.json(shape(row));
+    res.json(shape(row, req));
   }),
 );
 
@@ -58,11 +64,15 @@ brandRouter.put(
     const hex = accent.startsWith('#') ? accent : `#${accent}`;
 
     await q(
-      `update app_brand set name=$1, initials=$2, accent=$3, logo_url=$4, support_email=$5, updated_at=now() where id=1`,
+      `update app_brand set name=$1, initials=$2, accent=$3, logo_url=$4, support_email=$5,
+              is_customized=true, updated_at=now()
+        where id=1`,
       [name, initials || name.slice(0, 2).toUpperCase(), hex.toUpperCase(), logoUrl, supportEmail],
     );
 
-    const row = await one<BrandRow>(`select name, initials, accent, logo_url, support_email from app_brand where id=1`);
-    res.json(shape(row));
+    const row = await one<BrandRow>(
+      `select name, initials, accent, logo_url, support_email, is_customized from app_brand where id=1`,
+    );
+    res.json(shape(row, req));
   }),
 );

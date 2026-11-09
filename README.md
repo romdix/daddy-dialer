@@ -26,6 +26,35 @@ Lovable Cloud is Supabase. Here the database is your own Postgres container,
 the API is part of the same app, and auth is a plain email/password session
 cookie. Same schema, same row scoping by `workspace_id`, nothing rented.
 
+## Domains and white labelling
+
+**The name, logo and accent colour** live in the database, not in code. Sign in
+and open **Settings → White label**. Changes apply instantly, including the
+login screen, browser tab and favicon.
+
+You can also seed them at deploy time with environment variables —
+`BRAND_NAME`, `BRAND_INITIALS`, `BRAND_ACCENT`, `BRAND_LOGO_URL`. They only
+apply until someone saves branding in the UI, after which the UI wins.
+
+**Domains** belong to the host, not the app. In Coolify open the application →
+**Domains** and add as many as you want, comma separated:
+
+```
+https://dialer.romdix.com, https://calls.romdix.com, https://dial.acme.com
+```
+
+Each needs its own DNS record pointing at the server. The app answers on any of
+them because every URL it uses is relative — nothing is hardcoded to one host.
+
+One exception: Twilio has to know a single address to fetch call instructions
+from. Two ways to handle it:
+
+- **Leave `PUBLIC_URL` unset** (default). Twilio follows whichever domain you
+  were browsing when you saved Settings. After changing domains, press
+  **Re-sync Twilio address** on the Settings page.
+- **Set `PUBLIC_URL=**https://dialer.romdix.com**`.** Twilio always uses that
+  one, regardless of which domain you are on.
+
 ## Local development
 
 Requirements: Node 20+, and a Postgres you can reach.

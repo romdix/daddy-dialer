@@ -43,3 +43,27 @@ export async function migrate() {
   }
   console.log('[db] schema ready');
 }
+
+/**
+ * Seed branding from BRAND_* env vars on a fresh install.
+ * Once someone saves branding in the UI we never touch it again.
+ */
+export async function seedBrandFromEnv() {
+  const b = config.brand;
+  if (!b.name && !b.initials && !b.accent && !b.logoUrl) return;
+
+  const row = await one<any>(`select is_customized from app_brand where id=1`);
+  if (!row || row.is_customized) return;
+
+  await pool.query(
+    `update app_brand set
+        name     = coalesce(nullif($1,''), name),
+        initials = coalesce(nullif($2,''), initials),
+        accent   = coalesce(nullif($3,''), accent),
+        logo_url = coalesce(nullif($4,''), logo_url),
+        updated_at = now()
+      where id=1`,
+    [b.name, b.initials.toUpperCase(), b.accent.toUpperCase(), b.logoUrl],
+  );
+  console.log('[db] branding seeded from environment');
+}

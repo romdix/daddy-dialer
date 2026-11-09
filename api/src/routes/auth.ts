@@ -11,6 +11,7 @@ const COOKIE = (token: string) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   secure: config.isProd,
+  domain: config.cookieDomain,
   maxAge: config.sessionDays * 24 * 60 * 60 * 1000,
   path: '/',
 });

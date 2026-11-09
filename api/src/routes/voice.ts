@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { q, one } from '../db';
 import { requireAuth, wrap } from '../middleware';
 import { dec } from '../crypto';
-import { config } from '../config';
 import { ensureConfigured, getProvider, type ProviderSettings } from '../providers';
+import { baseUrl } from '../baseurl';
 import { normalizePhone, toE164 } from '../filters';
 
 export const voiceRouter = Router();
@@ -115,7 +115,7 @@ voiceRouter.post(
         record: settingsRow?.recording_enabled !== false,
         ringTimeout: settingsRow?.ring_timeout_sec || 30,
       },
-      config.publicUrl,
+      baseUrl(req),
     );
 
     res.type('text/xml').send(markup);

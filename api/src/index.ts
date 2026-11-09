@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
-import { migrate, pool } from './db';
+import { migrate, pool, seedBrandFromEnv } from './db';
 import { attachUser } from './middleware';
 import { authRouter } from './routes/auth';
 import { leadsRouter } from './routes/leads';
@@ -57,8 +57,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 async function main() {
   await migrate();
+  await seedBrandFromEnv();
   app.listen(config.port, () => {
-    console.log(`[api] listening on :${config.port} (public url ${config.publicUrl})`);
+    console.log(`[api] listening on :${config.port} (canonical url ${config.publicUrl || 'from request host'})`);
   });
 }
 

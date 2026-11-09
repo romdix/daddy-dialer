@@ -6,7 +6,10 @@ create table if not exists app_brand (
   accent        text not null default '#22C55E',
   logo_url      text,
   support_email text,
-  updated_at    timestamptz not null default now()
+  updated_at    timestamptz not null default now(),
+  is_customized boolean not null default false
 );
+
+alter table app_brand add column if not exists is_customized boolean not null default false;
 
 insert into app_brand (id) values (1) on conflict (id) do nothing;
