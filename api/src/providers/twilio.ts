@@ -78,7 +78,9 @@ export const twilioProvider: DialerProvider = {
 
   outboundMarkup(s, r, publicUrl) {
     const base = `${publicUrl}/api/voice`;
-    const qs = `callLogId=${encodeURIComponent(r.callLogId)}&workspaceId=${encodeURIComponent(r.workspaceId)}`;
+    // NOTE: this string goes inside an XML attribute, so the separator must be
+    // &amp; — a raw & makes Twilio reject the whole document (error 12100).
+    const qs = `callLogId=${encodeURIComponent(r.callLogId)}&amp;workspaceId=${encodeURIComponent(r.workspaceId)}`;
     const rec = r.record === false ? 'do-not-record' : 'record-from-answer';
     const timeout = Math.max(10, Math.min(60, r.ringTimeout || 30));
 

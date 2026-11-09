@@ -7,6 +7,28 @@ import { fmtDuration } from '../lib/format';
  * The floating dial-anything widget. The keypad stays mounted for the whole
  * call — connecting, ringing, live — so nobody loses DTMF mid-dial.
  */
+const sanitize = (v: string) =>
+  v
+    .replace(/[^\d+\s().-]/g, '')
+    .replace(/(?!^)\+/g, '')
+    .slice(0, 24);
+
+/** Turn whatever was typed or pasted into a clean, readable number. */
+export function formatNumber(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  const hasPlus = trimmed.startsWith('+');
+  let d = trimmed.replace(/\D/g, '');
+  if (!d) return trimmed;
+  if (!hasPlus && d.startsWith('00')) d = d.slice(2);
+
+  const isUS = d.length === 11 && d.startsWith('1');
+  if (isUS) return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (!hasPlus && d.length === 10) return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  if (hasPlus) return `+${d}`;
+  return trimmed;
+}
+
 export function PhoneWidget() {
   const d = useDialer();
   const [open, setOpen] = useState(false);
@@ -63,10 +85,42 @@ export function PhoneWidget() {
           </div>
 
           <div className="px-3 py-3">
-            <div className="mb-3 rounded-md border border-ink-700 bg-ink-950 px-3 py-2">
-              <div className="mono text-lg tracking-wide text-center truncate">
-                {inCall ? d.active?.to || number : number || <span className="text-zinc-600">Enter a number</span>}
-              </div>
+            <div className="mb-3 flex items-center gap-1.5">
+              {!inCall && (
+                <button
+                  type="button"
+                  onClick={() => setNumber((n) => '+' + n.trim().replace(/^[+]+/, '').replace(/^0+/, ''))}
+                  className="h-10 w-9 shrink-0 rounded-md border border-ink-700 bg-ink-900 text-sm text-zinc-300 hover:border-accent/60"
+                  title="Add a country code (+)"
+                >
+                  +
+                </button>
+              )}
+              <input
+                className="field mono !py-2 !text-lg text-center"
+                type="tel"
+                inputMode="tel"
+                autoComplete="off"
+                spellCheck={false}
+                autoFocus
+                readOnly={inCall}
+                placeholder="+1 786 920 0604"
+                value={inCall ? d.active?.to || number : number}
+                onChange={(e) => setNumber(sanitize(e.target.value))}
+                onPaste={(e) => {
+                  const text = e.clipboardData.getData('text');
+                  if (!text) return;
+                  e.preventDefault();
+                  setNumber(sanitize(formatNumber(text)));
+                }}
+                onBlur={() => setNumber((n) => sanitize(formatNumber(n)))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !inCall) {
+                    e.preventDefault();
+                    call();
+                  }
+                }}
+              />
             </div>
 
             <DialPad onKey={press} compact />
