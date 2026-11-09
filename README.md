@@ -1,12 +1,12 @@
-# Daddy Dialer
+# Romdix Dialer
 
 A browser-based power dialer CRM for cold-calling local service businesses.
 Dark industrial UI, CSV import, calling sessions with a queue, live in-browser
 calls, recordings, dispositions and a dashboard.
 
-The original spec came from the *Daddy Dialer* Lovable guide. This is a real
-build of that spec — no Lovable, no Supabase account with someone else in the
-middle. Just Postgres, a small Node API, and a React frontend.
+The original spec came from a public Lovable walkthrough. This is a real
+build of that spec — no Lovable, no Supabase account with someone else in
+the middle. Just Postgres, a small Node API, and a React frontend.
 
 ## What's inside
 
@@ -32,7 +32,7 @@ Requirements: Node 20+, and a Postgres you can reach.
 
 ```bash
 # 1. database
-createdb daddy_dialer            # or use the docker-compose db service
+createdb romdix_dialer            # or use the docker-compose db service
 
 # 2. api
 cd api

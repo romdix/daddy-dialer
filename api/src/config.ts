@@ -8,7 +8,7 @@ function need(name: string, fallback?: string): string {
 
 export const config = {
   port: Number(process.env.PORT || 8080),
-  databaseUrl: need('DATABASE_URL', 'postgres://postgres@localhost:5433/daddy_dialer'),
+  databaseUrl: need('DATABASE_URL', 'postgres://postgres@localhost:5433/romdix_dialer'),
   // Secrets in the DB (Twilio auth token, Telnyx key) are encrypted with this.
   appSecret: need('APP_SECRET', 'dev-only-insecure-secret-change-me'),
   // Public base URL, used for TwiML app + webhook callbacks. No trailing slash.

@@ -5,13 +5,13 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: daddy_dialer
-      POSTGRES_USER: dd
+      POSTGRES_DB: romdix_dialer
+      POSTGRES_USER: romdix
       POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me}
     volumes:
       - dd-db:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U dd -d daddy_dialer']
+      test: ['CMD-SHELL', 'pg_isready -U romdix -d romdix_dialer']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,7 +23,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://dd:${DB_PASSWORD:-change-me}@db:5432/daddy_dialer
+      DATABASE_URL: postgres://romdix:${DB_PASSWORD:-change-me}@db:5432/romdix_dialer
       APP_SECRET: ${APP_SECRET:-please-change-this}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       PORT: 8080
