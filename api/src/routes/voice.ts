@@ -428,7 +428,8 @@ voiceRouter.post(
     const b = req.body || {};
     const xml = (s: string) => res.type('text/xml').send(s);
     const to = toE164(normalizePhone(String(b.To || '')) || '');
-    const from = String(b.From || '');
+    const normFrom = normalizePhone(String(b.From || ''));
+    const from = normFrom ? toE164(normFrom) : String(b.From || '');
     if (!to) return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>');
 
     const owner =
@@ -441,7 +442,6 @@ voiceRouter.post(
     const ws = owner.workspace_id as string;
 
     // Attach the call to a lead — create one if this caller is new.
-    const normFrom = normalizePhone(from) || '';
     let lead = normFrom
       ? await one<any>(
           `select id, business_name from leads
