@@ -102,6 +102,7 @@ settingsRouter.put(
     let appError: string | null = null;
     if (provider === 'twilio') {
       const fresh = await loadRow(ws);
+      const brand = await one<{ name: string }>(`select name from app_brand where id=1`);
       try {
         appSid = await getProvider('twilio').ensureApp(
           {
@@ -112,6 +113,7 @@ settingsRouter.put(
             twilio_twiml_app: fresh.twilio_twiml_app,
           },
           config.publicUrl,
+          brand?.name,
         );
         if (appSid) await q(`update settings set twilio_twiml_app=$2 where workspace_id=$1`, [ws, appSid]);
       } catch (e: any) {

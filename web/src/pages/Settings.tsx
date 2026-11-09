@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { useDialer } from '../lib/dialer';
 import { useAuth } from '../lib/auth';
+import { useBrand, onAccent } from '../lib/brand';
 
 interface SettingsShape {
   provider: 'twilio' | 'telnyx';
@@ -18,12 +19,37 @@ export function Settings() {
   const qc = useQueryClient();
   const { refresh } = useAuth();
   const dialer = useDialer();
+  const { brand, save: saveBrand } = useBrand();
   const { data } = useQuery<SettingsShape>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
   const [form, setForm] = useState<SettingsShape | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const [bName, setBName] = useState(brand.name);
+  const [bInitials, setBInitials] = useState(brand.initials);
+  const [bAccent, setBAccent] = useState(brand.accent);
+  const [bLogo, setBLogo] = useState(brand.logoUrl || '');
+  const [brandMsg, setBrandMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBName(brand.name);
+    setBInitials(brand.initials);
+    setBAccent(brand.accent);
+    setBLogo(brand.logoUrl || '');
+  }, [brand.name, brand.initials, brand.accent, brand.logoUrl]);
+
+  const saveBranding = async () => {
+    setBrandMsg(null);
+    try {
+      await saveBrand({ name: bName, initials: bInitials, accent: bAccent, logoUrl: bLogo || null });
+      setBrandMsg('Branding saved');
+      setTimeout(() => setBrandMsg(null), 2500);
+    } catch (e: any) {
+      setBrandMsg(e?.message || 'Could not save branding');
+    }
+  };
 
   useEffect(() => {
     if (data && !form) setForm(data);
@@ -72,6 +98,84 @@ export function Settings() {
 
       <div className="max-w-3xl space-y-4 p-6">
         {err && <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">{err}</p>}
+
+        <section className="panel p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">White label</h2>
+              <p className="mt-1 text-xs text-muted">
+                Your product name, logo and accent colour. Applies everywhere — sidebar, login screen, browser tab and icon.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {brandMsg && <span className="text-2xs text-accent">{brandMsg}</span>}
+              <button className="btn-ghost !py-1.5 text-xs" onClick={saveBranding}>
+                Save branding
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Product name</label>
+              <input
+                className="field"
+                value={bName}
+                maxLength={48}
+                onChange={(e) => setBName(e.target.value)}
+                placeholder="Acme Dialer"
+              />
+            </div>
+            <div>
+              <label className="label">Initials (when no logo)</label>
+              <input
+                className="field mono"
+                value={bInitials}
+                maxLength={3}
+                onChange={(e) => setBInitials(e.target.value.toUpperCase())}
+                placeholder="AD"
+              />
+            </div>
+            <div>
+              <label className="label">Accent colour</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={bAccent}
+                  onChange={(e) => setBAccent(e.target.value.toUpperCase())}
+                  className="h-9 w-12 cursor-pointer rounded border border-ink-700 bg-ink-900"
+                />
+                <input className="field mono" value={bAccent} onChange={(e) => setBAccent(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Logo URL (optional)</label>
+              <input
+                className="field"
+                value={bLogo}
+                onChange={(e) => setBLogo(e.target.value)}
+                placeholder="https://cdn.example.com/logo.png"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3 rounded border border-ink-700 bg-ink-900 p-3">
+            <div
+              className="flex h-10 w-10 items-center justify-center overflow-hidden rounded"
+              style={{ background: bLogo ? 'transparent' : bAccent, color: onAccent(bAccent) }}
+            >
+              {bLogo ? (
+                <img src={bLogo} alt="" className="h-10 w-10 rounded object-cover" />
+              ) : (
+                <span className="text-xs font-bold">{(bInitials || 'AD').toUpperCase()}</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm">{bName || 'Your product'}</p>
+              <p className="text-2xs text-muted">Preview — this is what the sidebar and login screen will show.</p>
+            </div>
+          </div>
+        </section>
 
         <section className="panel p-4">
           <h2 className="text-sm font-semibold">Phone provider</h2>
@@ -218,7 +322,7 @@ export function Settings() {
                 type="checkbox"
                 checked={form.recordingEnabled}
                 onChange={(e) => setForm({ ...form, recordingEnabled: e.target.checked })}
-                className="h-4 w-4 accent-[#22C55E]"
+                className="h-4 w-4 accent-check"
               />
             </label>
 

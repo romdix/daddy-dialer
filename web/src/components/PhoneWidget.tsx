@@ -134,8 +134,9 @@ export function PhoneWidget() {
 
       <button
         onClick={() => setOpen((v) => !v)}
-        className="h-12 w-12 rounded-full bg-accent text-ink-950 shadow-lg shadow-accent/20
+        className="h-12 w-12 rounded-full bg-accent shadow-lg shadow-accent/20
                    hover:bg-accent-dim transition flex items-center justify-center"
+        style={{ color: 'var(--on-accent)' }}
         title="Open dialer"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

@@ -1,4 +1,4 @@
--- Daddy Dialer schema. Safe to run on every boot (idempotent).
+-- Dialer schema. Safe to run on every boot (idempotent).
 
 create extension if not exists pg_trgm;
 

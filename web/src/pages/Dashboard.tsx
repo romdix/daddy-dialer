@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { OUTCOME_LABEL, fmtDuration, outcomeColor } from '../lib/format';
 import { Badge } from '../components/ui';
+import { useBrand } from '../lib/brand';
 
 interface Dash {
   calls: {
@@ -33,6 +34,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 export function Dashboard() {
+  const { brand } = useBrand();
   const { data, isLoading } = useQuery<Dash>({
     queryKey: ['dashboard'],
     queryFn: () => api.get('/api/dashboard'),
@@ -74,8 +76,8 @@ export function Dashboard() {
                 <AreaChart data={data.daily} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
                   <defs>
                     <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#22C55E" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="#22C55E" stopOpacity={0} />
+                      <stop offset="0%" stopColor={brand.accent} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={brand.accent} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <XAxis
@@ -90,7 +92,7 @@ export function Dashboard() {
                     contentStyle={{ background: '#14161B', border: '1px solid #232730', borderRadius: 6, fontSize: 12 }}
                     labelStyle={{ color: '#8A9099' }}
                   />
-                  <Area type="monotone" dataKey="calls" stroke="#22C55E" strokeWidth={1.5} fill="url(#g1)" />
+                  <Area type="monotone" dataKey="calls" stroke={brand.accent} strokeWidth={1.5} fill="url(#g1)" />
                   <Area type="monotone" dataKey="connects" stroke="#38BDF8" strokeWidth={1.2} fillOpacity={0} />
                 </AreaChart>
               </ResponsiveContainer>

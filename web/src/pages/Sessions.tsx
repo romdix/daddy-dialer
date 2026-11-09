@@ -179,12 +179,12 @@ export function Sessions() {
               type="checkbox"
               checked={filter.neverCalled}
               onChange={(e) => setFilter({ ...filter, neverCalled: e.target.checked })}
-              className="accent-[#22C55E]"
+              className="accent-check"
             />
             Only leads never called
           </label>
           <label className="flex items-center gap-2 text-xs text-zinc-300">
-            <input type="checkbox" checked={excludeDnc} onChange={(e) => setExcludeDnc(e.target.checked)} className="accent-[#22C55E]" />
+            <input type="checkbox" checked={excludeDnc} onChange={(e) => setExcludeDnc(e.target.checked)} className="accent-check" />
             Leave out Do-Not-Call leads
           </label>
 

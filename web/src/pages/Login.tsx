@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { BrandMark, useBrand } from '../lib/brand';
 
 export function Login() {
   const nav = useNavigate();
   const { setMe, refresh } = useAuth();
+  const { brand } = useBrand();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -36,11 +38,9 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-2">
-          <div className="h-8 w-8 rounded bg-accent flex items-center justify-center">
-            <span className="text-ink-950 font-bold text-sm">DD</span>
-          </div>
+          <BrandMark size={32} />
           <div>
-            <h1 className="text-base font-semibold leading-tight">Daddy Dialer</h1>
+            <h1 className="text-base font-semibold leading-tight">{brand.name}</h1>
             <p className="text-2xs text-muted uppercase tracking-wider">Power Dialer CRM</p>
           </div>
         </div>

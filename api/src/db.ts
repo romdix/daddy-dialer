@@ -36,8 +36,10 @@ export async function tx<T>(fn: (c: any) => Promise<T>): Promise<T> {
 }
 
 export async function migrate() {
-  const file = path.join(__dirname, 'sql', 'schema.sql');
-  const sql = fs.readFileSync(file, 'utf8');
-  await pool.query(sql);
+  const dir = path.join(__dirname, 'sql');
+  for (const file of ['schema.sql', 'brand.sql']) {
+    const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+    await pool.query(sql);
+  }
   console.log('[db] schema ready');
 }

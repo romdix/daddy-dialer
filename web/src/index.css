@@ -4,6 +4,9 @@
 
 :root {
   color-scheme: dark;
+  --accent: 34 197 94;
+  --accent-dim: 22 163 74;
+  --on-accent: #0b0c0f;
 }
 
 html,
@@ -48,7 +51,15 @@ body {
            transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-accent text-ink-950 hover:bg-accent-dim;
+    @apply btn;
+    background-color: rgb(var(--accent));
+    color: var(--on-accent);
+  }
+  .btn-primary:hover {
+    background-color: rgb(var(--accent-dim));
+  }
+  .accent-check {
+    accent-color: rgb(var(--accent));
   }
   .btn-ghost {
     @apply btn border border-ink-700 text-zinc-300 hover:bg-ink-800 hover:text-white;

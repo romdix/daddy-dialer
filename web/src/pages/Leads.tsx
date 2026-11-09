@@ -203,7 +203,7 @@ export function Leads() {
                 setFilters({ ...filters, neverCalled: e.target.checked });
                 setPage(1);
               }}
-              className="accent-[#22C55E]"
+              className="accent-check"
             />
             never called
           </label>

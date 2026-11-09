@@ -11,6 +11,7 @@ import { sessionsRouter } from './routes/sessions';
 import { callsRouter } from './routes/calls';
 import { dashboardRouter } from './routes/dashboard';
 import { settingsRouter } from './routes/settings';
+import { brandRouter } from './routes/brand';
 import { voiceRouter } from './routes/voice';
 
 const app = express();
@@ -36,6 +37,7 @@ app.use('/api/sessions', sessionsRouter);
 app.use('/api/calls', callsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/brand', brandRouter);
 app.use('/api/voice', voiceRouter);
 
 // Built frontend (production / docker)

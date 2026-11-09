@@ -13,9 +13,9 @@ export default {
           600: '#2E333E',
         },
         accent: {
-          DEFAULT: '#22C55E',
-          dim: '#16A34A',
-          soft: 'rgba(34,197,94,0.12)',
+          DEFAULT: 'rgb(var(--accent) / <alpha-value>)',
+          dim: 'rgb(var(--accent-dim) / <alpha-value>)',
+          soft: 'rgb(var(--accent) / 0.12)',
         },
         muted: '#8A9099',
       },

@@ -196,7 +196,7 @@ export function SessionDialer() {
                         type="checkbox"
                         checked={autoDial}
                         onChange={(e) => setAutoDial(e.target.checked)}
-                        className="accent-[#22C55E]"
+                        className="accent-check"
                       />
                       auto-dial next
                     </label>

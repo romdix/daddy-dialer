@@ -32,16 +32,20 @@ export const twilioProvider: DialerProvider = {
     return Boolean(s.twilio_account_sid && s.twilio_auth_token && s.twilio_number);
   },
 
-  async ensureApp(s, publicUrl) {
+  async ensureApp(s, publicUrl, appName) {
     if (!this.isConfigured(s)) return null;
     const c = client(s);
+    const friendlyName = (appName || 'Power Dialer').slice(0, 64);
 
     // Reuse the app if it already exists.
     if (s.twilio_twiml_app) {
       try {
         const app = await c.applications(s.twilio_twiml_app).fetch();
-        if (app.voiceUrl !== `${publicUrl}/api/voice/twiml`) {
-          await c.applications(s.twilio_twiml_app).update({ voiceUrl: `${publicUrl}/api/voice/twiml` });
+        if (app.voiceUrl !== `${publicUrl}/api/voice/twiml` || app.friendlyName !== friendlyName) {
+          await c.applications(s.twilio_twiml_app).update({
+            voiceUrl: `${publicUrl}/api/voice/twiml`,
+            friendlyName,
+          });
         }
         return s.twilio_twiml_app;
       } catch {
@@ -50,7 +54,7 @@ export const twilioProvider: DialerProvider = {
     }
 
     const app = await c.applications.create({
-      friendlyName: 'Daddy Dialer',
+      friendlyName,
       voiceUrl: `${publicUrl}/api/voice/twiml`,
       voiceMethod: 'POST',
       statusCallback: `${publicUrl}/api/voice/status`,

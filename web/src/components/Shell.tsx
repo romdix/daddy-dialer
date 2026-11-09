@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { DialerProvider } from '../lib/dialer';
+import { BrandMark, useBrand } from '../lib/brand';
 import { PhoneWidget } from './PhoneWidget';
 
 const NAV = [
@@ -13,6 +14,7 @@ const NAV = [
 
 export function Shell() {
   const { me, logout } = useAuth();
+  const { brand } = useBrand();
   const nav = useNavigate();
   if (!me) return null;
 
@@ -21,10 +23,8 @@ export function Shell() {
       <div className="flex min-h-screen">
         <aside className="w-[210px] shrink-0 border-r border-ink-800 bg-ink-900/60">
           <div className="flex items-center gap-2 px-4 h-14 border-b border-ink-800">
-            <div className="h-6 w-6 rounded bg-accent flex items-center justify-center">
-              <span className="text-ink-950 font-bold text-xs">DD</span>
-            </div>
-            <span className="font-semibold tracking-tight">Daddy Dialer</span>
+            <BrandMark size={24} />
+            <span className="truncate font-semibold tracking-tight">{brand.name}</span>
           </div>
 
           <nav className="p-2 space-y-0.5">

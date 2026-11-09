@@ -30,7 +30,7 @@ export interface DialerProvider {
   label: string;
   isConfigured(s: ProviderSettings): boolean;
   /** Create/find the provider-side app object needed for browser calling. */
-  ensureApp(s: ProviderSettings, publicUrl: string): Promise<string | null>;
+  ensureApp(s: ProviderSettings, publicUrl: string, appName?: string): Promise<string | null>;
   /** Short-lived credential the browser SDK uses to connect. */
   browserToken(s: ProviderSettings, identity: string): Promise<{ token: string; identity: string }>;
   /** Markup the provider fetches when a browser call starts. */
