@@ -451,9 +451,11 @@ voiceRouter.post(
       : null;
     if (!lead && normFrom) {
       lead = await one<any>(
-        `insert into leads (workspace_id, business_name, phone, status, notes)
-         values ($1,$2,$3,'new','Created from an inbound call') returning id, business_name`,
-        [ws, from || 'Inbound caller', from],
+        `insert into leads (workspace_id, business_name, phone, phone_norm, status, notes)
+         values ($1,$2,$3,$4,'new','Created from an inbound call')
+         on conflict (workspace_id, phone_norm) do update set updated_at=now()
+         returning id, business_name`,
+        [ws, from || 'Inbound caller', from, normFrom],
       );
     }
 
