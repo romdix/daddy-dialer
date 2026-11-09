@@ -35,6 +35,20 @@ export interface DialerProvider {
   browserToken(s: ProviderSettings, identity: string): Promise<{ token: string; identity: string }>;
   /** Markup the provider fetches when a browser call starts. */
   outboundMarkup(s: ProviderSettings, r: OutboundRequest, publicUrl: string): string;
+  /** Conference-based calling (Twilio). The agent joins, then the lead is dialed in. */
+  agentMarkup?(r: OutboundRequest, publicUrl: string): string;
+  leadMarkup?(r: OutboundRequest): string;
+  dialIntoConference?(
+    s: ProviderSettings,
+    o: {
+      to: string;
+      from: string;
+      callLogId: string;
+      workspaceId: string;
+      publicUrl: string;
+      ringTimeout?: number;
+    },
+  ): Promise<{ sid: string }>;
   /** Normalized numbers the workspace can call from. */
   numbers(s: ProviderSettings): string[];
 }

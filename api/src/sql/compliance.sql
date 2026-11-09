@@ -16,6 +16,12 @@ alter table settings add column if not exists default_timezone text;
 create index if not exists leads_callback on leads (workspace_id, callback_at)
   where callback_at is not null;
 
+-- Conference calling: one browser leg + one PSTN leg per call, joined in a room.
+alter table call_logs add column if not exists agent_call_sid text;
+alter table call_logs add column if not exists lead_call_sid text;
+alter table call_logs add column if not exists conference_sid text;
+alter table call_logs add column if not exists connected_at timestamptz;
+
 -- 30s was too short: call screening on modern phones delays the answer.
 -- Only move rows still on the old default.
 alter table settings alter column ring_timeout_sec set default 60;

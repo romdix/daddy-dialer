@@ -27,6 +27,11 @@ function xmlEscape(v: string) {
   );
 }
 
+/** Room name for a call. Deterministic, so a retry joins the same room. */
+export function conferenceRoom(callLogId: string) {
+  return `call-${callLogId}`;
+}
+
 export const twilioProvider: DialerProvider = {
   id: 'twilio',
   label: 'Twilio',
@@ -76,26 +81,68 @@ export const twilioProvider: DialerProvider = {
     return { token: token.toJwt(), identity };
   },
 
-  outboundMarkup(s, r, publicUrl) {
+  /**
+   * What the AGENT's browser gets when it connects. It joins the conference room
+   * immediately, so the media path is live before the lead's phone even rings.
+   * endConferenceOnExit: when the agent hangs up, the whole room closes.
+   */
+  agentMarkup(r: OutboundRequest, publicUrl: string) {
     const base = `${publicUrl}/api/voice`;
-    // NOTE: this string goes inside an XML attribute, so the separator must be
-    // &amp; — a raw & makes Twilio reject the whole document (error 12100).
+    // Inside an XML attribute the separator must be &amp;.
     const qs = `callLogId=${encodeURIComponent(r.callLogId)}&amp;workspaceId=${encodeURIComponent(r.workspaceId)}`;
-    const rec = r.record === false ? 'do-not-record' : 'record-from-answer';
-    // Cold calls need a long ring: call screening on modern phones can delay the
-    // answer by 20-30 seconds. Twilio's max is 600, we cap at 90.
-    const timeout = Math.max(10, Math.min(90, r.ringTimeout || 60));
+    const room = conferenceRoom(r.callLogId);
+    const record =
+      r.record === false
+        ? ''
+        : ` record="record-from-start" recordingStatusCallback="${base}/recording?${qs}" recordingStatusCallbackMethod="POST"`;
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false"${record}
+                statusCallback="${base}/conf?${qs}" statusCallbackMethod="POST"
+                statusCallbackEvent="start end join leave">${xmlEscape(room)}</Conference>
+  </Dial>
+</Response>`;
+  },
 
-    if (r.mode === 'conference') {
-      const room = `dd-${r.callLogId.slice(0, 8)}`;
-      return `<?xml version="1.0" encoding="UTF-8"?>
+  /**
+   * What the LEAD's phone gets. Joining the same room bridges the two parties.
+   * endConferenceOnExit: when the lead hangs up, the agent's leg closes too.
+   */
+  leadMarkup(r: OutboundRequest) {
+    const room = conferenceRoom(r.callLogId);
+    return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial>
     <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">${xmlEscape(room)}</Conference>
   </Dial>
 </Response>`;
-    }
+  },
 
+  /** Places the outbound PSTN leg that joins the lead into the conference room. */
+  async dialIntoConference(s, o) {
+    const c = client(s);
+    const qs = `callLogId=${encodeURIComponent(o.callLogId)}&workspaceId=${encodeURIComponent(o.workspaceId)}`;
+    const timeout = Math.max(15, Math.min(90, o.ringTimeout || 60));
+    const call = await c.calls.create({
+      to: o.to,
+      from: o.from,
+      url: `${o.publicUrl}/api/voice/lead-twiml?${qs}`,
+      method: 'POST',
+      timeout,
+      statusCallback: `${o.publicUrl}/api/voice/status?${qs}`,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST',
+    });
+    return { sid: call.sid };
+  },
+
+  /** Legacy single-leg markup, kept for the Telnyx path / plain PSTN mode. */
+  outboundMarkup(s, r, publicUrl) {
+    const base = `${publicUrl}/api/voice`;
+    const qs = `callLogId=${encodeURIComponent(r.callLogId)}&amp;workspaceId=${encodeURIComponent(r.workspaceId)}`;
+    const rec = r.record === false ? 'do-not-record' : 'record-from-answer';
+    const timeout = Math.max(10, Math.min(90, r.ringTimeout || 60));
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial answerOnBridge="true" timeout="${timeout}" callerId="${xmlEscape(r.from)}"

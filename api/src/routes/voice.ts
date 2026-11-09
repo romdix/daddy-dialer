@@ -158,33 +158,31 @@ voiceRouter.post(
   }),
 );
 
-/** Twilio fetches this when the browser call starts. */
+/**
+ * Twilio fetches this when the AGENT's browser call starts.
+ *
+ * Conference model: the browser joins a named room and stays there. Once, and
+ * only once, we then place the lead's PSTN leg into the same room. Both legs
+ * see each other only when the lead actually answers and joins — which is what
+ * makes "connected" a real, observable fact instead of a guess.
+ */
 voiceRouter.post(
   '/twiml',
   wrap(async (req, res) => {
     const b = req.body || {};
     const callLogId = String(b.callLogId || b.CallLogId || '');
     const workspaceId = String(b.workspaceId || b.WorkspaceId || '');
-    const rawTo = String(b.dialTo || b.DialTo || '');
+    const agentSid = String(b.CallSid || '');
+    const publicUrl = baseUrl(req);
 
-    if (!isUuid(callLogId) || !isUuid(workspaceId)) {
+    const unknown = () =>
       res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Unknown call.</Say></Response>');
-      return;
-    }
+
+    if (!isUuid(callLogId) || !isUuid(workspaceId)) return unknown();
 
     const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
-    console.log('[voice] twiml hit', callLogId.slice(0, 8), 'to=', rawTo, 'row=', call ? 'yes' : 'no');
-    if (!call || call.workspace_id !== workspaceId) {
-      res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Unknown call.</Say></Response>');
-      return;
-    }
-
-    if (b.CallSid) {
-      await q(
-        `update call_logs set provider_call_id=$2, status='dialing' where id=$1 and (provider_call_id is null or provider_call_id='')`,
-        [callLogId, String(b.CallSid)],
-      );
-    }
+    console.log('[voice] twiml hit', callLogId.slice(0, 8), 'agent=', agentSid.slice(0, 8), 'row=', call ? 'yes' : 'no');
+    if (!call || call.workspace_id !== workspaceId) return unknown();
 
     const s = await loadSettings(workspaceId);
     const p = getProvider(call.provider);
@@ -192,7 +190,7 @@ voiceRouter.post(
       workspaceId,
     ]);
 
-    // Second gate: Twilio is asking us what to dial, so re-check there too.
+    // Second gate: Twilio is asking us what to dial, so re-check compliance here too.
     if (call.lead_id) {
       const lead = await one<any>(
         `select id, state, timezone, outcome, attempts, callback_at
@@ -204,31 +202,184 @@ voiceRouter.post(
         if (!verdict.callable) {
           const safe = String(verdict.reason || 'Calling blocked').replace(/[<>&"']/g, ' ');
           await q(`update call_logs set status='blocked', error=$2 where id=$1`, [callLogId, verdict.reason]);
-          res.type('text/xml').send(
-            `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${safe}</Say></Response>`,
-          );
+          res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>${safe}</Say></Response>`);
           return;
         }
       }
     }
 
-    const markup = p.outboundMarkup(
-      s,
-      {
-        to: toE164(normalizePhone(rawTo) || call.to_number.replace(/\D/g, '')),
-        from: call.from_number,
-        callLogId,
-        workspaceId,
-        leadId: call.lead_id,
-        sessionId: call.session_id,
-        mode: b.mode === 'conference' ? 'conference' : 'pstn',
-        record: settingsRow?.recording_enabled !== false,
-        ringTimeout: settingsRow?.ring_timeout_sec || 30,
-      },
-      baseUrl(req),
-    );
+    const request = {
+      to: call.to_number,
+      from: call.from_number,
+      callLogId,
+      workspaceId,
+      leadId: call.lead_id,
+      sessionId: call.session_id,
+      mode: 'conference' as const,
+      record: settingsRow?.recording_enabled !== false,
+      ringTimeout: settingsRow?.ring_timeout_sec || 60,
+    };
 
-    res.type('text/xml').send(markup);
+    // No conference support (e.g. Telnyx) -> legacy single-leg markup.
+    const agentMarkup = p.agentMarkup?.bind(p);
+    const dialInto = p.dialIntoConference?.bind(p);
+    if (!agentMarkup || !dialInto) {
+      res.type('text/xml').send(p.outboundMarkup(s, request, publicUrl));
+      return;
+    }
+
+    if (agentSid) {
+      await q(`update call_logs set agent_call_sid=coalesce(agent_call_sid,$2) where id=$1`, [callLogId, agentSid]);
+    }
+
+    // Answer the agent first — a fast, valid TwiML response matters.
+    res.type('text/xml').send(agentMarkup(request, publicUrl));
+
+    // Claim the dial atomically. A reconnecting browser hits /twiml again; it must
+    // join the room but must NOT cause a second call to the lead.
+    const claimed = await one<any>(
+      `update call_logs set lead_call_sid='pending', status='connecting'
+        where id=$1 and (lead_call_sid is null or lead_call_sid='' or lead_call_sid='pending')
+        returning id`,
+      [callLogId],
+    );
+    if (!claimed) {
+      console.log('[voice] dial skipped (already dialed)', callLogId.slice(0, 8));
+      return;
+    }
+
+    setImmediate(async () => {
+      try {
+        const r = await dialInto(s, {
+          to: call.to_number,
+          from: call.from_number,
+          callLogId,
+          workspaceId,
+          publicUrl,
+          ringTimeout: request.ringTimeout,
+        });
+        await q(`update call_logs set lead_call_sid=$2, provider_call_id=$2 where id=$1`, [callLogId, r.sid]);
+        console.log('[voice] lead dialed', callLogId.slice(0, 8), r.sid);
+      } catch (e: any) {
+        console.error('[voice] dial failed', callLogId.slice(0, 8), e?.message);
+        await q(`update call_logs set status='failed', error=$2, ended_at=now() where id=$1`, [
+          callLogId,
+          String(e?.message || 'Dial failed').slice(0, 300),
+        ]);
+      }
+    });
+  }),
+);
+
+/** Twilio fetches this when the LEAD's phone answers — it joins the room. */
+voiceRouter.post(
+  '/lead-twiml',
+  wrap(async (req, res) => {
+    const callLogId = String(req.query.callLogId || req.body.callLogId || '');
+    const workspaceId = String(req.query.workspaceId || req.body.workspaceId || '');
+    const hangup = () => res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+
+    if (!isUuid(callLogId) || !isUuid(workspaceId)) return hangup();
+    const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+    if (!call || call.workspace_id !== workspaceId) return hangup();
+
+    const p = getProvider(call.provider);
+    if (!p.leadMarkup) return hangup();
+    res.type('text/xml').send(p.leadMarkup({ to: call.to_number, from: call.from_number, callLogId, workspaceId }));
+  }),
+);
+
+/** Conference participant events: the only trustworthy "they answered" signal. */
+voiceRouter.post(
+  '/conf',
+  wrap(async (req, res) => {
+    res.sendStatus(204);
+    const callLogId = String(req.query.callLogId || req.body.callLogId || '');
+    if (!isUuid(callLogId)) return;
+    const b = req.body || {};
+    const ev = String(b.StatusCallbackEvent || '').toLowerCase();
+    const participant = String(b.CallSid || '');
+    const confSid = String(b.ConferenceSid || '');
+
+    const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+    if (!call) return;
+    console.log('[voice] conf', callLogId.slice(0, 8), ev, participant.slice(0, 8));
+
+    if (ev === 'start' && confSid) {
+      await q(`update call_logs set conference_sid=$2 where id=$1`, [callLogId, confSid]);
+      return;
+    }
+
+    // The agent is the browser leg; anyone else in the room is the lead.
+    const isLead = participant && participant !== call.agent_call_sid;
+
+    if (ev === 'join' && isLead) {
+      await q(
+        `update call_logs set status='in_progress', connected_at=coalesce(connected_at, now()),
+                lead_call_sid = case when lead_call_sid in ('pending','') or lead_call_sid is null then $2 else lead_call_sid end
+          where id=$1`,
+        [callLogId, participant],
+      );
+      return;
+    }
+
+    if (ev === 'leave' && isLead) {
+      await q(
+        `update call_logs set status='completed', ended_at=now(),
+                duration_sec = greatest(duration_sec, coalesce(extract(epoch from (now()-connected_at))::int, 0))
+          where id=$1`,
+        [callLogId],
+      );
+      if (call.lead_id) {
+        await q(`update leads set last_called_at=now(), updated_at=now() where id=$1`, [call.lead_id]);
+      }
+      if (call.session_id && call.lead_id) {
+        await q(
+          `update session_leads set called_at=coalesce(called_at, now()),
+                  status = case when status='pending' then 'done' else status end
+            where session_id=$1 and lead_id=$2`,
+          [call.session_id, call.lead_id],
+        );
+      }
+      return;
+    }
+
+    if (ev === 'end') {
+      await q(
+        `update call_logs set ended_at=coalesce(ended_at, now()),
+                status = case when connected_at is not null and status not in ('completed') then 'completed' else status end,
+                duration_sec = greatest(duration_sec, coalesce(extract(epoch from (now()-connected_at))::int, 0))
+          where id=$1`,
+        [callLogId],
+      );
+    }
+  }),
+);
+
+/** Live state for the dialer UI — polled every couple of seconds during a call. */
+voiceRouter.get(
+  '/state',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const callLogId = String(req.query.callLogId || '');
+    if (!isUuid(callLogId)) return res.status(400).json({ error: 'Bad call id' });
+
+    const row = await one<any>(
+      `select id, status, duration_sec, connected_at, ended_at, error,
+              extract(epoch from (now()-connected_at))::int as elapsed
+         from call_logs where id=$1 and workspace_id=$2`,
+      [callLogId, ws],
+    );
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    res.json({
+      status: row.status,
+      connected: Boolean(row.connected_at),
+      ended: Boolean(row.ended_at),
+      elapsedSec: Math.max(0, row.elapsed || 0),
+      error: row.error || null,
+    });
   }),
 );
 
@@ -265,8 +416,12 @@ voiceRouter.post(
     const params: any[] = [callLogId, status];
     let i = 3;
 
+    // An answered lead leg means the phone was picked up — start the clock.
+    if (status === 'in_progress') {
+      sets.push('connected_at = coalesce(connected_at, now())');
+    }
     if (duration) {
-      sets.push(`duration_sec=$${i++}`);
+      sets.push(`duration_sec=greatest(duration_sec, $${i++})`);
       params.push(duration);
     }
     if (['completed', 'busy', 'no_answer', 'failed', 'canceled'].includes(status)) {
