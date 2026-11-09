@@ -144,7 +144,12 @@ export function Settings() {
   const runTest = async () => {
     setTest({ loading: true });
     try {
-      const res = await api.post<any>('/api/settings/test');
+      const typed = form.twilio.authToken && !form.twilio.authToken.includes('•') ? form.twilio.authToken : undefined;
+      const res = await api.post<any>('/api/settings/test', {
+        accountSid: form.twilio.accountSid,
+        authToken: typed,
+        number: form.twilio.number,
+      });
       setTest(res);
     } catch (e: any) {
       setTest({ ok: false, error: e?.message });
@@ -363,6 +368,9 @@ export function Settings() {
               <span className={`text-2xs ${test.ok ? 'text-emerald-400' : 'text-red-400'}`}>
                 {test.ok ? `Connected to "${test.account}" (${test.status})` : test.error}
               </span>
+            )}
+            {test?.ok && form.twilio.authToken && !form.twilio.authToken.includes('•') && (
+              <span className="text-2xs text-amber-400">Press “Save changes” to keep these.</span>
             )}
           </div>
 

@@ -187,13 +187,23 @@ settingsRouter.post(
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
     const s = await loadRow(ws);
-    if (!s?.twilio_account_sid || !s?.twilio_auth_token) {
+
+    // Accept credentials straight from the form so "Test" works before saving.
+    const bodySid = String(req.body?.accountSid || '').trim();
+    const bodyToken = String(req.body?.authToken || '').trim();
+    const sid = bodySid || s?.twilio_account_sid;
+    const token = bodyToken || dec(s?.twilio_auth_token);
+
+    if (!sid || !token) {
       return res.status(400).json({ ok: false, error: 'Add your Twilio Account SID and Auth Token first.' });
+    }
+    if (!/^AC[0-9a-fA-F]{32}$/.test(sid)) {
+      return res.status(400).json({ ok: false, error: 'That Account SID does not look right — it starts with AC and is 34 characters.' });
     }
     try {
       const twilio = require('twilio');
-      const client = twilio(s.twilio_account_sid, dec(s.twilio_auth_token));
-      const account = await client.api.accounts(s.twilio_account_sid).fetch();
+      const client = twilio(sid, token);
+      const account = await client.api.accounts(sid).fetch();
       const numbers = await client.incomingPhoneNumbers.list({ limit: 20 });
       res.json({
         ok: true,
@@ -202,7 +212,11 @@ settingsRouter.post(
         numbers: numbers.map((n: any) => ({ phone: n.phoneNumber, voice: Boolean(n.capabilities?.voice) })),
       });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e?.message || 'Twilio rejected those credentials' });
+      const msg = e?.message || 'Twilio rejected those credentials';
+      const friendly = /authenticat|401/i.test(msg)
+        ? 'Twilio rejected the Auth Token for that Account SID (401). Copy the token again from the console home page.'
+        : msg;
+      res.status(400).json({ ok: false, error: friendly });
     }
   }),
 );
