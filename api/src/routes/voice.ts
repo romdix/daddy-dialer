@@ -6,6 +6,7 @@ import { ensureConfigured, getProvider, type ProviderSettings } from '../provide
 import { baseUrl } from '../baseurl';
 import { normalizePhone, toE164 } from '../filters';
 import { checkCallable } from '../compliance';
+import { ensureApiKey } from '../twiliokey';
 
 export const voiceRouter = Router();
 
@@ -37,6 +38,22 @@ async function loadCompliance(ws: string) {
   );
 }
 
+async function ensureTwimlApp(ws: string, s: ProviderSettings, req: any): Promise<ProviderSettings> {
+  if (s.provider !== 'twilio' || !s.twilio_account_sid || !s.twilio_auth_token) return s;
+  if (s.twilio_twiml_app) return s;
+  try {
+    const brand = await one<{ name: string }>(`select name from app_brand where id=1`);
+    const appSid = await getProvider('twilio').ensureApp(s, baseUrl(req), brand?.name);
+    if (appSid) {
+      await q(`update settings set twilio_twiml_app=$2 where workspace_id=$1`, [ws, appSid]);
+      return { ...s, twilio_twiml_app: appSid };
+    }
+  } catch (e: any) {
+    console.error('[twilio] twiml app setup failed:', e?.message);
+  }
+  return s;
+}
+
 /** Read-only health check for the voice setup. Returns no secrets. */
 voiceRouter.get(
   '/diag',
@@ -52,6 +69,8 @@ voiceRouter.get(
       authTokenLooksMasked: raw.includes('•'),
       hasNumber: Boolean(s.twilio_number),
       twimlApp: s.twilio_twiml_app || null,
+      apiKeyPresent: Boolean(s.twilio_api_key_sid && s.twilio_api_key_secret),
+      tokenIssuer: s.twilio_api_key_sid && s.twilio_api_key_secret ? 'api_key' : 'account_sid',
     };
     if (out.hasAccountSid && raw && !out.authTokenLooksMasked) {
       try {
@@ -83,7 +102,8 @@ voiceRouter.get(
     const numbers = p.numbers(s);
     if (!numbers.length) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
-    const creds = await p.browserToken(s, req.ctx!.userId);
+    const signing = await ensureTwimlApp(ws, await ensureApiKey(ws, s), req);
+    const creds = await p.browserToken(signing, req.ctx!.userId);
     res.json({ ...creds, provider: p.id, fromNumber: numbers[0] });
   }),
 );
@@ -126,7 +146,8 @@ voiceRouter.post(
       [ws, req.body?.leadId || null, req.body?.sessionId || null, p.id, numbers[0], toE164(norm)],
     );
 
-    const creds = await p.browserToken(s, req.ctx!.userId);
+    const signing = await ensureTwimlApp(ws, await ensureApiKey(ws, s), req);
+    const creds = await p.browserToken(signing, req.ctx!.userId);
     if (req.body?.leadId) {
       await q(`update leads set attempts = attempts + 1, last_called_at = now() where id=$1 and workspace_id=$2`, [
         req.body.leadId,

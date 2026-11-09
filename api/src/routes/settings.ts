@@ -4,6 +4,7 @@ import { enc, dec, mask } from '../crypto';
 import { requireAuth, wrap } from '../middleware';
 import { getProvider } from '../providers';
 import { baseUrl } from '../baseurl';
+import { ensureApiKey } from '../twiliokey';
 import type { ProviderId } from '../providers/types';
 
 export const settingsRouter = Router();
@@ -156,6 +157,17 @@ settingsRouter.put(
           brand?.name,
         );
         if (appSid) await q(`update settings set twilio_twiml_app=$2 where workspace_id=$1`, [ws, appSid]);
+
+        // Browser tokens need an API Key; provision one on save so calls work.
+        await ensureApiKey(ws, {
+          provider: 'twilio',
+          twilio_account_sid: fresh.twilio_account_sid,
+          twilio_auth_token: dec(fresh.twilio_auth_token),
+          twilio_number: fresh.twilio_number,
+          twilio_twiml_app: fresh.twilio_twiml_app,
+          twilio_api_key_sid: fresh.twilio_api_key_sid,
+          twilio_api_key_secret: dec(fresh.twilio_api_key_secret),
+        });
       } catch (e: any) {
         appError = e?.message || 'Could not create the Twilio app';
       }
