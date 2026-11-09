@@ -63,6 +63,7 @@ export function PhoneWidget() {
   };
 
   const call = async () => {
+    if (inCall) return;
     const to = number.replace(/[^\d+]/g, '');
     if (to.length < 7) return;
     try {

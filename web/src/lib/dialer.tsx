@@ -41,6 +41,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const timer = useRef<any>(null);
   const pollRef = useRef<any>(null);
   const pollFailures = useRef(0);
+  const startingRef = useRef(false);
   const endedHandler = useRef<((c: StartedCall & { durationSec: number }) => void) | null>(null);
   const secondsRef = useRef(0);
   const liveRef = useRef(false);
@@ -95,6 +96,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const finish = useCallback(
     (cause: string, callLogId?: string) => {
       cleanupTimer();
+      startingRef.current = false;
       liveRef.current = false;
       const info = { ...(activeRef.current || { callLogId: callLogId || '', to: '' }) } as StartedCall;
       const dur = secondsRef.current;
@@ -172,12 +174,21 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const start = useCallback(
     async (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference' }) => {
       setError(null);
-      if (callRef.current) throw new Error('A call is already in progress');
+      // Guards against a double click: callRef only becomes set once connect()
+      // resolves, so without this two fast clicks could dial twice.
+      if (callRef.current || startingRef.current) throw new Error('A call is already in progress');
+      startingRef.current = true;
 
-      const started = await api.post<{ callLogId: string; token: string; identity: string; provider: string; fromNumber: string }>(
-        '/api/voice/start',
-        { to: o.to, leadId: o.leadId, sessionId: o.sessionId, mode: o.mode || 'pstn' },
-      );
+      const started = await api
+        .post<{ callLogId: string; token: string; identity: string; provider: string; fromNumber: string }>(
+          '/api/voice/start',
+          { to: o.to, leadId: o.leadId, sessionId: o.sessionId, mode: o.mode || 'conference' },
+        )
+        .catch((e: any) => {
+          startingRef.current = false;
+          setStatus('idle');
+          throw e;
+        });
 
       const info: StartedCall = { callLogId: started.callLogId, to: o.to, label: o.label, leadId: o.leadId, sessionId: o.sessionId };
       activeRef.current = info;
@@ -213,10 +224,19 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
         await deviceRef.current.updateToken(started.token);
       }
 
-      const call = await deviceRef.current.connect({
-        params: { callLogId: started.callLogId, workspaceId },
-      });
+      const call = await deviceRef.current
+        .connect({
+          params: { callLogId: started.callLogId, workspaceId },
+        })
+        .catch((e: any) => {
+          startingRef.current = false;
+          setStatus('idle');
+          setActive(null);
+          activeRef.current = null;
+          throw e;
+        });
       callRef.current = call;
+      startingRef.current = false;
 
       // In conference mode the agent joins the room immediately, so 'accept' means
       // our own media path is live. The lead is dialled by the server separately
