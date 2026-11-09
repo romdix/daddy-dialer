@@ -59,15 +59,12 @@ voiceRouter.post(
   requireAuth,
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
-    const s = await loadSettings(ws);
-    const p = ensureConfigured(s);
-    const numbers = p.numbers(s);
-    if (!numbers.length) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
+    // Compliance is checked before anything else, so the reason shown is the
+    // real one (do-not-call / hours / attempts) rather than a config error.
     const norm = normalizePhone(String(req.body?.to || ''));
     if (!norm) return res.status(400).json({ error: 'That phone number does not look valid' });
 
-    // Refuse the dial before it leaves the browser if it is not allowed.
     if (req.body?.leadId) {
       const lead = await one<any>(
         `select id, state, timezone, outcome, attempts, callback_at
@@ -82,6 +79,11 @@ voiceRouter.post(
         await q(`update leads set attempts = attempts + 1, last_called_at = now() where id=$1`, [lead.id]);
       }
     }
+
+    const s = await loadSettings(ws);
+    const p = ensureConfigured(s);
+    const numbers = p.numbers(s);
+    if (!numbers.length) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
     const row = await one<any>(
       `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at)
