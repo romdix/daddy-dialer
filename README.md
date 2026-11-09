@@ -4,6 +4,8 @@ A browser-based power dialer CRM for cold-calling local service businesses.
 Dark industrial UI, CSV import, calling sessions with a queue, live in-browser
 calls, recordings, dispositions and a dashboard.
 
+**Full setup, domain, white-label and troubleshooting guide: [SETUP.md](SETUP.md).**
+
 The original spec came from a public Lovable walkthrough. This is a real
 build of that spec — no Lovable, no Supabase account with someone else in
 the middle. Just Postgres, a small Node API, and a React frontend.
