@@ -173,6 +173,7 @@ voiceRouter.post(
     }
 
     const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+    console.log('[voice] twiml hit', callLogId.slice(0, 8), 'to=', rawTo, 'row=', call ? 'yes' : 'no');
     if (!call || call.workspace_id !== workspaceId) {
       res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Unknown call.</Say></Response>');
       return;
@@ -255,6 +256,8 @@ voiceRouter.post(
     const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
     if (!call) return res.sendStatus(204);
 
+    console.log('[voice] status', callLogId.slice(0, 8), b.CallStatus, 'dur', b.CallDuration || 0);
+
     const status = mapStatus(String(b.CallStatus || ''));
     const duration = Number(b.CallDuration || b.RecordingDuration || 0) || 0;
 
@@ -305,6 +308,7 @@ voiceRouter.post(
     const callLogId = String(req.query.callLogId || req.body.callLogId || '');
     const b = req.body || {};
     if (isUuid(callLogId) && b.RecordingSid) {
+      console.log('[voice] recording', callLogId.slice(0, 8), b.RecordingSid);
       await q(
         `update call_logs set recording_sid=$2, recording_url=$3,
                 duration_sec = greatest(duration_sec, $4)

@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Device, Call } from '@twilio/voice-sdk';
 import { api } from './api';
 
@@ -73,6 +74,7 @@ class Ringback {
 }
 
 export function DialerProvider({ children, workspaceId }: { children: React.ReactNode; workspaceId: string }) {
+  const qc = useQueryClient();
   const deviceRef = useRef<Device | null>(null);
   const callRef = useRef<Call | null>(null);
   const ringback = useRef<Ringback>(new Ringback());
@@ -142,6 +144,11 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
         const ended = { ...info, durationSec: dur, cause };
         setLastEnded(ended);
         endedHandler.current?.({ ...info, durationSec: dur });
+        // Refresh anything that lists calls so the new row shows up immediately.
+        qc.invalidateQueries({ queryKey: ['calls'] });
+        qc.invalidateQueries({ queryKey: ['dashboard'] });
+        qc.invalidateQueries({ queryKey: ['callbacks'] });
+        if (info.sessionId) qc.invalidateQueries({ queryKey: ['session', info.sessionId] });
       }
       setTimeout(() => setStatus((s) => (s === 'ended' ? 'idle' : s)), 1200);
     },
