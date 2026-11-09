@@ -13,6 +13,14 @@ async function loadRow(workspaceId: string) {
 }
 
 function publicView(s: any) {
+  const rawToken = dec(s?.twilio_auth_token);
+  const tokenLooksInvalid = Boolean(rawToken) && (rawToken.includes('•') || rawToken.length < 20);
+  const warnings: string[] = [];
+  if (tokenLooksInvalid) {
+    warnings.push(
+      'The saved Twilio Auth Token looks corrupted — it contains a masked value. Paste the real token again and save.',
+    );
+  }
   return {
     provider: s?.provider || 'twilio',
     twilio: {
@@ -42,6 +50,7 @@ function publicView(s: any) {
       provider: (s?.provider || 'twilio') as ProviderId,
       ...s,
     }),
+    warnings,
   };
 }
 
@@ -66,10 +75,17 @@ settingsRouter.put(
     const t = b.twilio || {};
     const x = b.telnyx || {};
 
-    // A blank secret field means "leave what is saved alone".
-    const authTokenEnc = t.authToken ? enc(String(t.authToken)) : current?.twilio_auth_token ?? null;
-    const apiSecretEnc = t.apiKeySecret ? enc(String(t.apiKeySecret)) : current?.twilio_api_key_secret ?? null;
-    const telnyxKeyEnc = x.apiKey ? enc(String(x.apiKey)) : current?.telnyx_api_key ?? null;
+    // A blank OR masked secret field means "leave what is saved alone".
+    // (The form shows a masked placeholder, so a second save must not store it.)
+    const isMask = (v: any) => typeof v === 'string' && v.includes('•');
+    const authTokenEnc =
+      t.authToken && !isMask(t.authToken) ? enc(String(t.authToken)) : current?.twilio_auth_token ?? null;
+    const apiSecretEnc =
+      t.apiKeySecret && !isMask(t.apiKeySecret)
+        ? enc(String(t.apiKeySecret))
+        : current?.twilio_api_key_secret ?? null;
+    const telnyxKeyEnc =
+      x.apiKey && !isMask(x.apiKey) ? enc(String(x.apiKey)) : current?.telnyx_api_key ?? null;
 
     const comp = b.compliance || {};
 

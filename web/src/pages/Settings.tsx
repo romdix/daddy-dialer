@@ -21,6 +21,7 @@ interface SettingsShape {
     defaultTimezone: string;
   };
   configured: boolean;
+  warnings?: string[];
 }
 
 const COMPLIANCE_DEFAULTS = {
@@ -91,7 +92,14 @@ export function Settings() {
   };
 
   useEffect(() => {
-    if (data && !form) setForm({ ...data, compliance: { ...COMPLIANCE_DEFAULTS, ...(data.compliance || {}) } });
+    if (data && !form)
+      setForm({
+        ...data,
+        // Never keep a masked secret in form state — saving it back would corrupt the real one.
+        twilio: { ...data.twilio, authToken: '', apiKeySecret: '' },
+        telnyx: { ...data.telnyx, apiKey: '' },
+        compliance: { ...COMPLIANCE_DEFAULTS, ...(data.compliance || {}) },
+      });
   }, [data, form]);
 
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
@@ -128,7 +136,11 @@ export function Settings() {
     setErr(null);
     try {
       const res = await api.put<any>('/api/settings', form);
-      setForm(res);
+      setForm({
+        ...res,
+        twilio: { ...res.twilio, authToken: '', apiKeySecret: '' },
+        telnyx: { ...res.telnyx, apiKey: '' },
+      });
       setSaved(true);
       if (res.appError) setErr(`Saved, but Twilio app setup failed: ${res.appError}`);
       qc.invalidateQueries({ queryKey: ['settings'] });
@@ -166,6 +178,11 @@ export function Settings() {
 
       <div className="max-w-3xl space-y-4 p-6">
         {err && <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">{err}</p>}
+        {(data?.warnings || []).map((w) => (
+          <p key={w} className="rounded border border-amber-900/50 bg-amber-950/25 px-3 py-2 text-xs text-amber-300">
+            {w}
+          </p>
+        ))}
 
         <section className="panel p-4">
           <div className="flex items-start justify-between gap-3">
@@ -338,8 +355,8 @@ export function Settings() {
               <input
                 className="field mono"
                 type="password"
-                placeholder={form.twilio.authToken || 'paste once, then it is hidden'}
-                value={form.twilio.authToken?.startsWith('•') || form.twilio.authToken?.includes('•') ? '' : form.twilio.authToken}
+                placeholder={data?.twilio.authToken || 'paste once, then it is hidden'}
+                value={form.twilio.authToken}
                 onChange={(e) => setT('authToken', e.target.value)}
               />
               <p className="mt-1 text-2xs text-muted">Leave blank to keep the saved token.</p>
@@ -403,7 +420,7 @@ export function Settings() {
               <input
                 className="field mono"
                 type="password"
-                placeholder={form.telnyx.apiKey || 'KEYxxxxxxxxxxxx'}
+                placeholder={data?.telnyx.apiKey || 'KEYxxxxxxxxxxxx'}
                 value={form.telnyx.apiKey}
                 onChange={(e) => setX('apiKey', e.target.value)}
               />

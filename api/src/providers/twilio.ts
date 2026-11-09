@@ -13,9 +13,12 @@ function client(s: ProviderSettings) {
 
 function tokenKey(s: ProviderSettings) {
   // Twilio lets you sign access tokens with an API Key (preferred) or the account auth token.
-  const keySid = s.twilio_api_key_sid || s.twilio_account_sid!;
-  const secret = s.twilio_api_key_secret || s.twilio_auth_token!;
-  return { keySid, secret };
+  // Both halves must be present — mixing one half with the other secret produces
+  // AccessTokenInvalid (20101) instead of a clear error.
+  if (s.twilio_api_key_sid && s.twilio_api_key_secret) {
+    return { keySid: s.twilio_api_key_sid, secret: s.twilio_api_key_secret };
+  }
+  return { keySid: s.twilio_account_sid!, secret: s.twilio_auth_token! };
 }
 
 function xmlEscape(v: string) {

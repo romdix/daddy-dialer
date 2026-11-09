@@ -37,6 +37,41 @@ async function loadCompliance(ws: string) {
   );
 }
 
+/** Read-only health check for the voice setup. Returns no secrets. */
+voiceRouter.get(
+  '/diag',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const s = await loadSettings(ws);
+    const raw = s.twilio_auth_token || '';
+    const out: any = {
+      provider: s.provider,
+      hasAccountSid: /^AC[0-9a-f]{32}$/i.test(s.twilio_account_sid || ''),
+      authTokenLength: raw.length,
+      authTokenLooksMasked: raw.includes('•'),
+      hasNumber: Boolean(s.twilio_number),
+      twimlApp: s.twilio_twiml_app || null,
+    };
+    if (out.hasAccountSid && raw && !out.authTokenLooksMasked) {
+      try {
+        const twilio = require('twilio');
+        const c = twilio(s.twilio_account_sid, raw);
+        const acct = await c.api.accounts(s.twilio_account_sid).fetch();
+        out.accountOk = true;
+        out.accountStatus = acct.status;
+        out.accountName = acct.friendlyName;
+        const apps = await c.applications.list({ limit: 5 });
+        out.twimlAppMatches = apps.some((a: any) => a.sid === s.twilio_twiml_app);
+      } catch (e: any) {
+        out.accountOk = false;
+        out.accountError = e?.message;
+      }
+    }
+    res.json(out);
+  }),
+);
+
 /** Step 1 — the browser asks for a short-lived credential before dialing. */
 voiceRouter.get(
   '/token',
