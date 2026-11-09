@@ -38,15 +38,16 @@ API on port 8080.
 | Repository | `github.com/romdix/romdix-dialer` (public) |
 | Coolify | `https://coolify.romdix.com` |
 | Coolify project | Romdix Dialer |
-| Coolify application | `romdix-dialer` |
-| Server | softicx server — `158.69.211.35` |
-| Database service | `romdix-dialer-db` (user `romdix`, database `romdix_dialer`) |
-| Live URL (temporary) | `https://qskwkcgo0scsc0c00s480kc0.158.69.211.35.sslip.io` |
-| Live URL (alias) | `https://romdix-dialer.158.69.211.35.sslip.io` |
+| Coolify application | `romdix-dialer` (`ws08w08sw44wg40g48ok8g4o`) |
+| Server | the Coolify host itself — "localhost" — `15.204.210.185` |
+| Database service | `romdix-dialer-db` (`wgcg0kgk44wwo8c84socoscw`), user `romdix`, database `romdix_dialer`, same host |
+| Live URL | **https://dialer.romdix.com** |
+| Fallback URL | `https://ws08w08sw44wg40g48ok8g4o.15.204.210.185.sslip.io` |
 
-The sslip.io addresses are temporary placeholders that work with a real
-certificate — no DNS needed. Replace them with your own domain when ready
-(section 6).
+`dialer.romdix.com` is a CNAME to `coolify.romdix.com`, which resolves to
+`15.204.210.185`. That works because the app and the Coolify control panel share
+a host. The app previously ran on the separate "softicx" server
+(`158.69.211.35`); it was moved here and that copy was removed.
 
 ---
 
@@ -160,10 +161,19 @@ At your DNS provider (Cloudflare for `romdix.com`):
 
 | Type | Name | Content | Proxy |
 |---|---|---|---|
-| A | `dialer` | `158.69.211.35` | **DNS only** (grey cloud) for the first issuance |
+| CNAME | `dialer` | `coolify.romdix.com` | **DNS only** (grey cloud) |
+| *or* A | `dialer` | `15.204.210.185` | **DNS only** (grey cloud) |
 
-Once the certificate exists you can switch the proxy on if you want Cloudflare
-in front of it.
+Both work. A CNAME is only valid if it resolves to the server actually running
+this app — pointing it at the Coolify panel host is fine only because the app
+lives there too.
+
+**Proxy must be off (grey cloud) for the first certificate.** Cloudflare in
+*Full (strict)* mode refuses to talk to an origin that has no valid certificate,
+and Traefik cannot obtain one while the proxy intercepts the validation. With
+the proxy off, Cloudflare answers `526 Invalid SSL certificate`.
+
+Once the certificate exists you can switch the proxy back on.
 
 ### 5.2 Then Coolify
 
