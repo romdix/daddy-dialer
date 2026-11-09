@@ -76,7 +76,6 @@ voiceRouter.post(
         if (!verdict.callable) {
           return res.status(409).json({ error: verdict.reason, blocked: true });
         }
-        await q(`update leads set attempts = attempts + 1, last_called_at = now() where id=$1`, [lead.id]);
       }
     }
 
@@ -93,6 +92,12 @@ voiceRouter.post(
     );
 
     const creds = await p.browserToken(s, req.ctx!.userId);
+    if (req.body?.leadId) {
+      await q(`update leads set attempts = attempts + 1, last_called_at = now() where id=$1 and workspace_id=$2`, [
+        req.body.leadId,
+        ws,
+      ]);
+    }
     res.json({ callLogId: row!.id, ...creds, provider: p.id, fromNumber: numbers[0] });
   }),
 );

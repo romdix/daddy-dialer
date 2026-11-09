@@ -269,14 +269,53 @@ with progress tracked.
 
 ### Work the queue
 
-Open the session. The lead card shows the business, number, address and notes.
-Press **Call now**.
+Open the session. The lead card shows the business, number, address, notes and
+the **lead's local time**. Press **Call now**.
 
 - The keypad stays visible from connecting through the whole call.
 - Disposition chips appear when the call ends. One click records the outcome and
   moves to the next lead.
+- Picking **Callback Requested** opens a date/time picker — it lands in the
+  Callbacks page and on the lead.
 - Tick **auto-dial next** to chain calls automatically after a disposition.
 - Ring timeout is 45 seconds; unanswered dials are not billed by Twilio.
+
+**Keyboard shortcuts** (session page only):
+
+| Key | Does |
+|---|---|
+| `Space` | Call the current lead / hang up |
+| `1`–`9` | Pick that disposition |
+| `←` `→` | Previous / next lead |
+
+### Compliance guard
+
+Every dial passes a server-side gate before it leaves the browser, and again
+when Twilio asks what to dial. Configure it in **Settings → Calling window**:
+
+| Setting | Default | Effect |
+|---|---|---|
+| Enforce calling hours | on | Blocks dials outside the window |
+| Start / end hour | 08:00 – 21:00 | In the **lead's** timezone, not yours |
+| Calling days | Mon–Fri | Weekday check is also local |
+| Max attempts per lead | 0 (off) | Stops dialing after N tries |
+| Default timezone | America/New_York | Used when a lead has no state |
+
+Timezone comes from the lead's `state`, unless the lead has its own timezone or
+the workspace sets a default. States that span zones use their main zone — a
+lead can be corrected individually in the lead editor.
+
+**Do-not-call is always enforced**, whatever the settings say. A `do_not_call`
+outcome blocks the dial from the session, the lead list and the floating
+widget, and the API returns a clear reason instead of placing the call.
+
+This is a guardrail, not legal advice: it does not check any DNC registry.
+
+### Callbacks
+
+**Callbacks** in the sidebar lists every lead with a scheduled time, split into
+*Due now* and *Upcoming*, each with the lead's local time and a Call button.
+Press **Done** to clear the schedule.
 
 ### Dial any number
 
@@ -285,8 +324,8 @@ page and logs calls the same way.
 
 ### Fix an outcome later
 
-Call Log → click a row → change the outcome. The lead record and the session
-queue update with it.
+Call Log → click a row → change the outcome and add a **note** for that specific
+call. The lead record and the session queue update with it.
 
 ---
 
@@ -375,10 +414,11 @@ Deliberately out of scope for v1:
   returns a clear error until implemented.
 - **Conference / "join me" mode.** The TwiML for it exists, no UI yet.
 - **Transcripts.** The column and player exist; nothing fills them.
-- **National DNC registry checks.** The app honours a `do_not_call` outcome and
-  keeps those leads out of new sessions, but does not query any registry.
-- **Calling-hours guard by lead timezone.**
+- **Voicemail drop.** No pre-recorded message is played on voicemail.
+- **Bulk lead actions** (multi-select → DNC / delete) and **CSV export**.
 - **Parallel / multi-line dialing.**
+- **DNC registry lookups.** The app enforces a do-not-call flag but does not
+  query any registry.
 
 ---
 
