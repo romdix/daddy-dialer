@@ -82,7 +82,9 @@ export const twilioProvider: DialerProvider = {
     // &amp; — a raw & makes Twilio reject the whole document (error 12100).
     const qs = `callLogId=${encodeURIComponent(r.callLogId)}&amp;workspaceId=${encodeURIComponent(r.workspaceId)}`;
     const rec = r.record === false ? 'do-not-record' : 'record-from-answer';
-    const timeout = Math.max(10, Math.min(60, r.ringTimeout || 30));
+    // Cold calls need a long ring: call screening on modern phones can delay the
+    // answer by 20-30 seconds. Twilio's max is 600, we cap at 90.
+    const timeout = Math.max(10, Math.min(90, r.ringTimeout || 60));
 
     if (r.mode === 'conference') {
       const room = `dd-${r.callLogId.slice(0, 8)}`;

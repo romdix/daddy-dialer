@@ -38,7 +38,7 @@ function publicView(s: any) {
       number: s?.telnyx_number || '',
     },
     recordingEnabled: s?.recording_enabled ?? true,
-    ringTimeoutSec: s?.ring_timeout_sec ?? 30,
+    ringTimeoutSec: s?.ring_timeout_sec ?? 60,
     compliance: {
       enforce: s?.enforce_compliance ?? true,
       windowStart: s?.call_window_start ?? 8,
@@ -128,7 +128,7 @@ settingsRouter.put(
         (x.connectionId ?? current?.telnyx_connection_id ?? null) || null,
         (x.number ?? current?.telnyx_number ?? null) || null,
         b.recordingEnabled ?? current?.recording_enabled ?? true,
-        Number(b.ringTimeoutSec ?? current?.ring_timeout_sec ?? 30),
+        Number(b.ringTimeoutSec ?? current?.ring_timeout_sec ?? 60),
         comp.enforce ?? current?.enforce_compliance ?? true,
         Number(comp.windowStart ?? current?.call_window_start ?? 8),
         Number(comp.windowEnd ?? current?.call_window_end ?? 21),

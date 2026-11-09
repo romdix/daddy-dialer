@@ -15,3 +15,8 @@ alter table settings add column if not exists default_timezone text;
 
 create index if not exists leads_callback on leads (workspace_id, callback_at)
   where callback_at is not null;
+
+-- 30s was too short: call screening on modern phones delays the answer.
+-- Only move rows still on the old default.
+alter table settings alter column ring_timeout_sec set default 60;
+update settings set ring_timeout_sec = 60 where ring_timeout_sec = 30;

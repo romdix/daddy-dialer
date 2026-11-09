@@ -225,8 +225,8 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
         finish('failed', started.callLogId);
       });
 
-      // Nothing answered within the ring window -> hang up so we do not bill ring time.
-      const ringLimit = 45_000;
+      // Nothing answered within the ring window -> hang up.
+      const ringLimit = 90_000;
       setTimeout(() => {
         if (callRef.current && !liveRef.current) {
           try {
