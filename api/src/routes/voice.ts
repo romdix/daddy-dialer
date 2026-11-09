@@ -5,6 +5,7 @@ import { dec } from '../crypto';
 import { ensureConfigured, getProvider, type ProviderSettings } from '../providers';
 import { baseUrl } from '../baseurl';
 import { normalizePhone, toE164 } from '../filters';
+import { checkCallable } from '../compliance';
 
 export const voiceRouter = Router();
 
@@ -25,6 +26,15 @@ async function loadSettings(ws: string): Promise<ProviderSettings> {
     telnyx_connection_id: s.telnyx_connection_id,
     telnyx_number: s.telnyx_number,
   };
+}
+
+async function loadCompliance(ws: string) {
+  return one<any>(
+    `select enforce_compliance, call_window_start, call_window_end, call_window_days,
+            max_attempts, default_timezone
+       from settings where workspace_id=$1`,
+    [ws],
+  );
 }
 
 /** Step 1 — the browser asks for a short-lived credential before dialing. */
@@ -56,6 +66,22 @@ voiceRouter.post(
 
     const norm = normalizePhone(String(req.body?.to || ''));
     if (!norm) return res.status(400).json({ error: 'That phone number does not look valid' });
+
+    // Refuse the dial before it leaves the browser if it is not allowed.
+    if (req.body?.leadId) {
+      const lead = await one<any>(
+        `select id, state, timezone, outcome, attempts, callback_at
+           from leads where id=$1 and workspace_id=$2`,
+        [req.body.leadId, ws],
+      );
+      if (lead) {
+        const verdict = checkCallable(lead, await loadCompliance(ws));
+        if (!verdict.callable) {
+          return res.status(409).json({ error: verdict.reason, blocked: true });
+        }
+        await q(`update leads set attempts = attempts + 1, last_called_at = now() where id=$1`, [lead.id]);
+      }
+    }
 
     const row = await one<any>(
       `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at)
@@ -101,6 +127,26 @@ voiceRouter.post(
     const settingsRow = await one<any>(`select recording_enabled, ring_timeout_sec from settings where workspace_id=$1`, [
       workspaceId,
     ]);
+
+    // Second gate: Twilio is asking us what to dial, so re-check there too.
+    if (call.lead_id) {
+      const lead = await one<any>(
+        `select id, state, timezone, outcome, attempts, callback_at
+           from leads where id=$1 and workspace_id=$2`,
+        [call.lead_id, workspaceId],
+      );
+      if (lead) {
+        const verdict = checkCallable(lead, await loadCompliance(workspaceId));
+        if (!verdict.callable) {
+          const safe = String(verdict.reason || 'Calling blocked').replace(/[<>&"']/g, ' ');
+          await q(`update call_logs set status='blocked', error=$2 where id=$1`, [callLogId, verdict.reason]);
+          res.type('text/xml').send(
+            `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${safe}</Say></Response>`,
+          );
+          return;
+        }
+      }
+    }
 
     const markup = p.outboundMarkup(
       s,

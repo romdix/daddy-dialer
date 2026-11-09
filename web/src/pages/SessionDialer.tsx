@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -23,6 +23,16 @@ interface Row {
   notes?: string | null;
   outcome?: string | null;
   last_called_at?: string | null;
+  attempts?: number;
+  callback_at?: string | null;
+  callable?: boolean;
+  reason?: string;
+  localLabel?: string;
+}
+
+function localDatetimeValue(d: Date) {
+  const off = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
 }
 
 export function SessionDialer() {
@@ -35,6 +45,8 @@ export function SessionDialer() {
   const [pendingCallLogId, setPendingCallLogId] = useState<string | null>(null);
   const [autoDial, setAutoDial] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [callbackFor, setCallbackFor] = useState<string | null>(null);
+  const [callbackAt, setCallbackAt] = useState('');
 
   const { data, refetch } = useQuery<{ session: any; leads: Row[] }>({
     queryKey: ['session', id],
@@ -75,11 +87,27 @@ export function SessionDialer() {
 
   const dispose = async (outcome: string) => {
     if (!pendingCallLogId) return;
+    if (outcome === 'callback_requested' && !callbackAt) {
+      setCallbackFor(pendingCallLogId);
+      setCallbackAt(localDatetimeValue(new Date(Date.now() + 60 * 60 * 1000)));
+      return;
+    }
+    await applyOutcome(outcome, outcome === 'callback_requested' ? callbackAt : undefined);
+  };
+
+  const applyOutcome = async (outcome: string, cbAt?: string) => {
+    if (!pendingCallLogId) return;
     await api.patch(`/api/calls/${pendingCallLogId}/outcome`, { outcome });
+    if (cbAt && current) {
+      await api.patch(`/api/leads/${current.id}`, { callback_at: new Date(cbAt).toISOString() });
+    }
     setPendingCallLogId(null);
+    setCallbackFor(null);
+    setCallbackAt('');
     const res = await refetch();
     qc.invalidateQueries({ queryKey: ['dashboard'] });
     qc.invalidateQueries({ queryKey: ['calls'] });
+    qc.invalidateQueries({ queryKey: ['callbacks'] });
 
     const next = (res.data?.leads || []).findIndex((l: Row) => l.queue_status === 'pending');
     if (next !== -1) {
@@ -96,6 +124,35 @@ export function SessionDialer() {
   };
 
   const inCall = dialer.status === 'connecting' || dialer.status === 'ringing' || dialer.status === 'live';
+  const blocked = current ? current.callable === false : false;
+
+  // Keyboard shortcuts — bound once, always calling the latest handlers.
+  const handlers = useRef({ call, hangup: () => dialer.hangup(), dispose, move, blocked, inCall, current });
+  handlers.current = { call, hangup: () => dialer.hangup(), dispose, move, blocked, inCall, current };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+      const h = handlers.current;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (h.inCall) return h.hangup();
+        if (!h.blocked && h.current) h.call();
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        const outcome = QUICK_OUTCOMES[Number(e.key) - 1];
+        if (outcome) h.dispose(outcome);
+        return;
+      }
+      if (e.key === 'ArrowRight') h.move(1);
+      if (e.key === 'ArrowLeft') h.move(-1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const upcoming = useMemo(() => leads.slice(index + 1, index + 8), [leads, index]);
 
@@ -113,6 +170,10 @@ export function SessionDialer() {
         <div className="h-1 w-full overflow-hidden rounded-full bg-ink-800">
           <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
         </div>
+        <p className="mt-1.5 text-2xs text-muted">
+          Shortcuts: <span className="text-zinc-300">Space</span> call / hang up ·{' '}
+          <span className="text-zinc-300">1–9</span> disposition · <span className="text-zinc-300">← →</span> move
+        </p>
       </div>
 
       <div className="grid gap-4 p-6 lg:grid-cols-3">
@@ -136,6 +197,10 @@ export function SessionDialer() {
                     {[current.address, current.city, current.state].filter(Boolean).join(' · ') || 'No address'}
                     {current.website ? ` · ${current.website}` : ''}
                   </p>
+                  <p className="mt-1 text-2xs text-muted">
+                    Local time: <span className="text-zinc-300">{current.localLabel || '—'}</span>
+                    {Number(current.attempts || 0) > 0 ? ` · ${current.attempts} tries` : ''}
+                  </p>
                 </div>
 
                 <div className="text-right shrink-0">
@@ -145,6 +210,12 @@ export function SessionDialer() {
                   </div>
                 </div>
               </div>
+
+              {blocked && (
+                <div className="mt-3 rounded border border-amber-900/50 bg-amber-950/25 px-3 py-2 text-xs text-amber-300">
+                  {current.reason || 'This lead cannot be dialed right now.'}
+                </div>
+              )}
 
               {current.notes && (
                 <div className="mt-4 rounded border border-ink-700 bg-ink-900 p-3">
@@ -165,8 +236,8 @@ export function SessionDialer() {
 
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 {!inCall && !pendingCallLogId && (
-                  <button className="btn-primary px-6" onClick={call}>
-                    Call now
+                  <button className="btn-primary px-6" onClick={call} disabled={blocked}>
+                    {blocked ? 'Blocked' : 'Call now'}
                   </button>
                 )}
                 {inCall && (
@@ -211,20 +282,53 @@ export function SessionDialer() {
             <div className="panel p-8 text-center text-sm text-muted">This queue is empty.</div>
           )}
 
-          {pendingCallLogId && (
+          {pendingCallLogId && callbackFor !== pendingCallLogId && (
             <div className="panel border-accent/30 p-4">
               <p className="text-xs uppercase tracking-wider text-muted">How did it go?</p>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {QUICK_OUTCOMES.map((o) => (
+                {QUICK_OUTCOMES.map((o, i) => (
                   <button
                     key={o}
                     onClick={() => dispose(o)}
                     className={`rounded border px-2.5 py-1.5 text-xs hover:brightness-125 ${outcomeColor(o)}`}
                   >
+                    <span className="mono mr-1 text-2xs opacity-60">{i + 1}</span>
                     {OUTCOME_LABEL[o]}
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {pendingCallLogId && callbackFor === pendingCallLogId && (
+            <div className="panel border-accent/30 p-4">
+              <p className="text-xs uppercase tracking-wider text-muted">When should we call back?</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  type="datetime-local"
+                  className="field mono !w-auto"
+                  value={callbackAt}
+                  onChange={(e) => setCallbackAt(e.target.value)}
+                />
+                <button
+                  className="btn-primary !py-1.5 text-xs"
+                  onClick={() => applyOutcome('callback_requested', callbackAt)}
+                >
+                  Save callback
+                </button>
+                <button
+                  className="btn-ghost !py-1.5 text-xs"
+                  onClick={() => {
+                    setCallbackFor(null);
+                    setCallbackAt('');
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="mt-2 text-2xs text-muted">
+                It shows up in Callbacks at the time you pick, and this lead remembers it next session.
+              </p>
             </div>
           )}
         </div>

@@ -21,6 +21,8 @@ interface Lead {
   status: string;
   outcome?: string | null;
   last_called_at?: string | null;
+  callback_at?: string | null;
+  attempts?: number;
 }
 
 interface Filters {
@@ -298,6 +300,13 @@ export function Leads() {
   );
 }
 
+function toLocalInput(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const off = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
+}
+
 function LeadEditor({
   lead,
   onClose,
@@ -355,6 +364,25 @@ function LeadEditor({
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="col-span-2">
+          <label className="label">Callback at</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="datetime-local"
+              className="field mono !w-auto"
+              value={toLocalInput(form.callback_at)}
+              onChange={(e) =>
+                set('callback_at', e.target.value ? new Date(e.target.value).toISOString() : null)
+              }
+            />
+            {form.callback_at && (
+              <button className="text-2xs text-muted hover:text-red-400" onClick={() => set('callback_at', null)}>
+                clear
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="col-span-2">

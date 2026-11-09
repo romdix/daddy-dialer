@@ -30,6 +30,14 @@ function publicView(s: any) {
     },
     recordingEnabled: s?.recording_enabled ?? true,
     ringTimeoutSec: s?.ring_timeout_sec ?? 30,
+    compliance: {
+      enforce: s?.enforce_compliance ?? true,
+      windowStart: s?.call_window_start ?? 8,
+      windowEnd: s?.call_window_end ?? 21,
+      windowDays: s?.call_window_days ?? '1,2,3,4,5',
+      maxAttempts: s?.max_attempts ?? 0,
+      defaultTimezone: s?.default_timezone || '',
+    },
     configured: getProvider(s?.provider || 'twilio').isConfigured({
       provider: (s?.provider || 'twilio') as ProviderId,
       ...s,
@@ -63,11 +71,15 @@ settingsRouter.put(
     const apiSecretEnc = t.apiKeySecret ? enc(String(t.apiKeySecret)) : current?.twilio_api_key_secret ?? null;
     const telnyxKeyEnc = x.apiKey ? enc(String(x.apiKey)) : current?.telnyx_api_key ?? null;
 
+    const comp = b.compliance || {};
+
     await q(
       `insert into settings (workspace_id, provider, twilio_account_sid, twilio_auth_token, twilio_number,
                              twilio_api_key_sid, twilio_api_key_secret, telnyx_api_key, telnyx_connection_id,
-                             telnyx_number, recording_enabled, ring_timeout_sec, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+                             telnyx_number, recording_enabled, ring_timeout_sec,
+                             enforce_compliance, call_window_start, call_window_end, call_window_days,
+                             max_attempts, default_timezone, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
        on conflict (workspace_id) do update set
          provider = excluded.provider,
          twilio_account_sid = excluded.twilio_account_sid,
@@ -80,6 +92,12 @@ settingsRouter.put(
          telnyx_number = excluded.telnyx_number,
          recording_enabled = excluded.recording_enabled,
          ring_timeout_sec = excluded.ring_timeout_sec,
+         enforce_compliance = excluded.enforce_compliance,
+         call_window_start = excluded.call_window_start,
+         call_window_end = excluded.call_window_end,
+         call_window_days = excluded.call_window_days,
+         max_attempts = excluded.max_attempts,
+         default_timezone = excluded.default_timezone,
          updated_at = now()`,
       [
         ws,
@@ -94,6 +112,12 @@ settingsRouter.put(
         (x.number ?? current?.telnyx_number ?? null) || null,
         b.recordingEnabled ?? current?.recording_enabled ?? true,
         Number(b.ringTimeoutSec ?? current?.ring_timeout_sec ?? 30),
+        comp.enforce ?? current?.enforce_compliance ?? true,
+        Number(comp.windowStart ?? current?.call_window_start ?? 8),
+        Number(comp.windowEnd ?? current?.call_window_end ?? 21),
+        String(comp.windowDays ?? current?.call_window_days ?? '1,2,3,4,5'),
+        Number(comp.maxAttempts ?? current?.max_attempts ?? 0),
+        (comp.defaultTimezone ?? current?.default_timezone ?? null) || null,
       ],
     );
 

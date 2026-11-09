@@ -12,8 +12,35 @@ interface SettingsShape {
   telnyx: { apiKey: string; connectionId: string; number: string };
   recordingEnabled: boolean;
   ringTimeoutSec: number;
+  compliance: {
+    enforce: boolean;
+    windowStart: number;
+    windowEnd: number;
+    windowDays: string;
+    maxAttempts: number;
+    defaultTimezone: string;
+  };
   configured: boolean;
 }
+
+const COMPLIANCE_DEFAULTS = {
+  enforce: true,
+  windowStart: 8,
+  windowEnd: 21,
+  windowDays: '1,2,3,4,5',
+  maxAttempts: 0,
+  defaultTimezone: '',
+};
+
+const DAY_LABELS: [number, string][] = [
+  [1, 'Mon'],
+  [2, 'Tue'],
+  [3, 'Wed'],
+  [4, 'Thu'],
+  [5, 'Fri'],
+  [6, 'Sat'],
+  [0, 'Sun'],
+];
 
 export function Settings() {
   const qc = useQueryClient();
@@ -64,8 +91,32 @@ export function Settings() {
   };
 
   useEffect(() => {
-    if (data && !form) setForm(data);
+    if (data && !form) setForm({ ...data, compliance: { ...COMPLIANCE_DEFAULTS, ...(data.compliance || {}) } });
   }, [data, form]);
+
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
+  const [pwMsg, setPwMsg] = useState<string | null>(null);
+  const changePassword = async () => {
+    setPwMsg(null);
+    if (pw.next !== pw.confirm) return setPwMsg('The two new passwords do not match');
+    try {
+      await api.post('/api/auth/password', { current: pw.current, next: pw.next });
+      setPw({ current: '', next: '', confirm: '' });
+      setPwMsg('Password changed. Other browsers were signed out.');
+    } catch (e: any) {
+      setPwMsg(e?.message || 'Could not change the password');
+    }
+  };
+
+  const setComp = (patch: Partial<SettingsShape['compliance']>) =>
+    setForm((f) => (f ? { ...f, compliance: { ...COMPLIANCE_DEFAULTS, ...f.compliance, ...patch } } : f));
+
+  const comp = { ...COMPLIANCE_DEFAULTS, ...(form?.compliance || {}) };
+  const days = comp.windowDays.split(',').map((d) => Number(d.trim()));
+  const toggleDay = (d: number) => {
+    const next = days.includes(d) ? days.filter((x) => x !== d) : [...days, d];
+    setComp({ windowDays: next.sort((a, b) => a - b).join(',') });
+  };
 
   if (!form) return <div className="p-6 text-sm text-muted">Loading…</div>;
 
@@ -403,6 +454,121 @@ export function Settings() {
                 Bluetooth headsets connected after page load show up here — pick one and it is used without a refresh.
               </p>
             </div>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <h2 className="text-sm font-semibold">Calling window</h2>
+          <p className="mt-1 text-xs text-muted">
+            Blocks dialing outside business hours in the lead's own timezone. Do-not-call leads are always blocked,
+            whatever this says.
+          </p>
+
+          <label className="mt-3 flex items-center justify-between gap-4 text-sm">
+            <span>
+              Enforce calling hours
+              <span className="block text-2xs text-muted">Server-side — the browser cannot bypass it.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-check"
+              checked={comp.enforce}
+              onChange={(e) => setComp({ enforce: e.target.checked })}
+            />
+          </label>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Start hour</label>
+              <select className="field" value={comp.windowStart} onChange={(e) => setComp({ windowStart: Number(e.target.value) })}>
+                {Array.from({ length: 24 }, (_, h) => h).map((h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, '0')}:00
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">End hour (exclusive)</label>
+              <select className="field" value={comp.windowEnd} onChange={(e) => setComp({ windowEnd: Number(e.target.value) })}>
+                {Array.from({ length: 25 }, (_, h) => h).map((h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, '0')}:00
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <label className="label">Calling days</label>
+            <div className="flex flex-wrap gap-1">
+              {DAY_LABELS.map(([d, label]) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleDay(d)}
+                  className={`rounded border px-2 py-1 text-xs transition ${
+                    days.includes(d)
+                      ? 'border-accent/60 bg-accent-soft text-accent'
+                      : 'border-ink-700 text-muted hover:text-zinc-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Max attempts per lead</label>
+              <input
+                type="number"
+                min={0}
+                className="field mono !w-32"
+                value={comp.maxAttempts}
+                onChange={(e) => setComp({ maxAttempts: Number(e.target.value) })}
+              />
+              <p className="mt-1 text-2xs text-muted">0 = unlimited</p>
+            </div>
+            <div>
+              <label className="label">Default timezone (optional)</label>
+              <input
+                className="field mono"
+                placeholder="America/New_York"
+                value={comp.defaultTimezone}
+                onChange={(e) => setComp({ defaultTimezone: e.target.value })}
+              />
+              <p className="mt-1 text-2xs text-muted">Used when a lead has no state.</p>
+            </div>
+          </div>
+
+          <p className="mt-3 text-2xs text-muted">Save changes with the button at the top of the page.</p>
+        </section>
+
+        <section className="panel p-4">
+          <h2 className="text-sm font-semibold">Change password</h2>
+          <p className="mt-1 text-xs text-muted">Signing out of every other browser when you change it.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div>
+              <label className="label">Current</label>
+              <input type="password" className="field" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">New</label>
+              <input type="password" className="field" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Confirm</label>
+              <input type="password" className="field" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button className="btn-ghost !py-1.5 text-xs" onClick={changePassword} disabled={!pw.current || !pw.next}>
+              Update password
+            </button>
+            {pwMsg && <span className="text-2xs text-accent">{pwMsg}</span>}
           </div>
         </section>
       </div>

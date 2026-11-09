@@ -5,6 +5,7 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Leads } from './pages/Leads';
 import { Sessions } from './pages/Sessions';
+import { Callbacks } from './pages/Callbacks';
 import { SessionDialer } from './pages/SessionDialer';
 import { CallLog } from './pages/CallLog';
 import { Settings } from './pages/Settings';
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/leads" element={<Leads />} />
         <Route path="/sessions" element={<Sessions />} />
+        <Route path="/callbacks" element={<Callbacks />} />
         <Route path="/sessions/:id" element={<SessionDialer />} />
         <Route path="/calls" element={<CallLog />} />
         <Route path="/settings" element={<Settings />} />

@@ -3,6 +3,7 @@ import { q, one, tx } from '../db';
 import { requireAuth, wrap } from '../middleware';
 import { buildLeadWhere, normalizePhone, formatPhone, SORTABLE, type LeadFilter } from '../filters';
 import { OUTCOMES, STATUSES } from '../config';
+import { checkCallable } from '../compliance';
 
 export const leadsRouter = Router();
 
@@ -18,6 +19,8 @@ const FIELDS = [
   'notes',
   'status',
   'outcome',
+  'timezone',
+  'callback_at',
 ] as const;
 
 function pickFilter(req: any): LeadFilter {
@@ -93,6 +96,32 @@ leadsRouter.get(
   }),
 );
 
+/** Leads with a scheduled callback, annotated with local time + callable state. */
+leadsRouter.get(
+  '/callbacks',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const rows = await q<any>(
+      `select * from leads
+        where workspace_id=$1 and callback_at is not null
+        order by callback_at asc
+        limit 500`,
+      [ws],
+    );
+    const settings = await one<any>(
+      `select enforce_compliance, call_window_start, call_window_end, call_window_days,
+              max_attempts, default_timezone
+         from settings where workspace_id=$1`,
+      [ws],
+    );
+    res.json({
+      rows: rows.map((r) => ({ ...r, ...checkCallable(r, settings) })),
+      serverNow: new Date().toISOString(),
+    });
+  }),
+);
+
 leadsRouter.get(
   '/:id',
   requireAuth,
@@ -103,11 +132,17 @@ leadsRouter.get(
     );
     if (!row) return res.status(404).json({ error: 'Lead not found' });
     const calls = await q(
-      `select id, outcome, duration_sec, called_at, recording_sid, status
+      `select id, outcome, duration_sec, called_at, recording_sid, status, notes
          from call_logs where lead_id=$1 order by called_at desc limit 20`,
       [req.params.id],
     );
-    res.json({ ...row, calls });
+    const settings = await one<any>(
+      `select enforce_compliance, call_window_start, call_window_end, call_window_days,
+              max_attempts, default_timezone
+         from settings where workspace_id=$1`,
+      [req.ctx!.workspaceId],
+    );
+    res.json({ ...row, calls, ...checkCallable(row as any, settings) });
   }),
 );
 

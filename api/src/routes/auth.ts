@@ -88,6 +88,33 @@ authRouter.post(
   }),
 );
 
+authRouter.post(
+  '/password',
+  requireAuth,
+  wrap(async (req, res) => {
+    const current = String(req.body?.current || '');
+    const next = String(req.body?.next || '');
+    if (next.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
+
+    const user = await one<{ password_hash: string }>(`select password_hash from users where id=$1`, [
+      req.ctx!.userId,
+    ]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const ok = await bcrypt.compare(current, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Current password is wrong' });
+
+    await q(`update users set password_hash=$2 where id=$1`, [req.ctx!.userId, await bcrypt.hash(next, 10)]);
+
+    // Sign out everywhere else, keep this browser.
+    const raw = (req as any).cookies?.[config.cookieName];
+    if (raw) {
+      await q(`delete from auth_sessions where user_id=$1 and token_hash <> $2`, [req.ctx!.userId, sha256(raw)]);
+    }
+    res.json({ ok: true });
+  }),
+);
+
 authRouter.get(
   '/me',
   requireAuth,

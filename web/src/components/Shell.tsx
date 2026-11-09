@@ -8,6 +8,7 @@ const NAV = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/leads', label: 'Leads' },
   { to: '/sessions', label: 'Sessions' },
+  { to: '/callbacks', label: 'Callbacks' },
   { to: '/calls', label: 'Call Log' },
   { to: '/settings', label: 'Settings' },
 ];

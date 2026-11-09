@@ -3,6 +3,7 @@ import { q, one, tx } from '../db';
 import { requireAuth, wrap } from '../middleware';
 import { buildLeadWhere, type LeadFilter } from '../filters';
 import { SESSION_STATUSES } from '../config';
+import { checkCallable } from '../compliance';
 
 export const sessionsRouter = Router();
 
@@ -52,7 +53,14 @@ sessionsRouter.get(
       [req.params.id],
     );
 
-    res.json({ session, leads });
+    const settings = await one<any>(
+      `select enforce_compliance, call_window_start, call_window_end, call_window_days,
+              max_attempts, default_timezone
+         from settings where workspace_id=$1`,
+      [ws],
+    );
+
+    res.json({ session, leads: leads.map((l: any) => ({ ...l, ...checkCallable(l, settings) })) });
   }),
 );
 

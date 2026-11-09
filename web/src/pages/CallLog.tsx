@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, qs } from '../lib/api';
 import { PageHeader } from '../components/Shell';
@@ -15,9 +15,44 @@ interface CallRow {
   duration_sec: number;
   recording_sid?: string | null;
   transcript?: string | null;
+  notes?: string | null;
   called_at: string;
   session_name?: string | null;
   provider: string;
+}
+
+function CallNotes({ call }: { call: CallRow }) {
+  const qc = useQueryClient();
+  const [value, setValue] = useState(call.notes || '');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setValue(call.notes || '');
+  }, [call.id]);
+
+  const save = async () => {
+    await api.patch(`/api/calls/${call.id}`, { notes: value });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    qc.invalidateQueries({ queryKey: ['calls'] });
+  };
+
+  return (
+    <div>
+      <textarea
+        className="field h-20 text-xs"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="What was said, what happens next…"
+      />
+      <div className="mt-1 flex items-center gap-2">
+        <button className="btn-ghost !py-1 !text-2xs" onClick={save}>
+          Save note
+        </button>
+        {saved && <span className="text-2xs text-accent">saved</span>}
+      </div>
+    </div>
+  );
 }
 
 export function CallLog() {
@@ -145,6 +180,9 @@ export function CallLog() {
                                   </option>
                                 ))}
                               </select>
+
+                              <p className="mb-1 mt-3 text-2xs uppercase tracking-wider text-muted">Notes</p>
+                              <CallNotes call={c} />
 
                               <p className="mb-1 mt-3 text-2xs uppercase tracking-wider text-muted">Transcript</p>
                               <p className="text-xs text-zinc-400 whitespace-pre-wrap">

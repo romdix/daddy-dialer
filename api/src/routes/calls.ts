@@ -65,6 +65,25 @@ callsRouter.get(
   }),
 );
 
+/** Free-text note on a single call. */
+callsRouter.patch(
+  '/:id',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const notes = req.body?.notes;
+    if (notes !== undefined && typeof notes !== 'string') {
+      return res.status(400).json({ error: 'notes must be text' });
+    }
+    const row = await one(
+      `update call_logs set notes=$3 where id=$1 and workspace_id=$2 returning *`,
+      [req.params.id, ws, (notes ?? '').trim() || null],
+    );
+    if (!row) return res.status(404).json({ error: 'Call not found' });
+    res.json(row);
+  }),
+);
+
 /** Set or correct the disposition after the fact. */
 callsRouter.patch(
   '/:id/outcome',
