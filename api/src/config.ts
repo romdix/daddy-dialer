@@ -42,6 +42,12 @@ export const config = {
   isProd: process.env.NODE_ENV === 'production',
   cookieName: 'dd_session',
   sessionDays: 30,
+
+  /**
+   * Where call recordings are kept on this server. Mount a volume here so the
+   * files survive redeploys (Coolify: custom docker run options -v host:/data/recordings).
+   */
+  recordingsDir: process.env.RECORDINGS_DIR || '/data/recordings',
 };
 
 export const OUTCOMES = [

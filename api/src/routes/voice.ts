@@ -7,6 +7,7 @@ import { baseUrl } from '../baseurl';
 import { normalizePhone, toE164 } from '../filters';
 import { checkCallable } from '../compliance';
 import { ensureApiKey } from '../twiliokey';
+import { attachLocalCopy, copyRecordingToDisk } from '../recordings';
 
 export const voiceRouter = Router();
 
@@ -649,6 +650,28 @@ voiceRouter.post(
           where id=$1`,
         [callLogId, String(b.RecordingSid), String(b.RecordingUrl || ''), Number(b.RecordingDuration || 0) || 0],
       );
+
+      // Pull the audio onto this server straight away. Twilio bills storage per
+      // stored minute every month, so holding it here is what lets us delete theirs.
+      try {
+        const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+        const s = call ? await loadSettings(call.workspace_id) : null;
+        if (call && s?.twilio_account_sid && s?.twilio_auth_token) {
+          const copied = await copyRecordingToDisk({
+            callLogId,
+            workspaceId: call.workspace_id,
+            recordingSid: String(b.RecordingSid),
+            accountSid: s.twilio_account_sid,
+            authToken: s.twilio_auth_token,
+          });
+          if (copied) {
+            await attachLocalCopy(callLogId, copied);
+            console.log('[voice] recording saved locally', callLogId.slice(0, 8), copied.bytes, 'bytes');
+          }
+        }
+      } catch (e: any) {
+        console.error('[voice] local recording copy failed', callLogId.slice(0, 8), e?.message);
+      }
     }
     res.sendStatus(204);
   }),

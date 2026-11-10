@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import fs from 'node:fs';
 import { q, one } from '../db';
 import { requireAuth, wrap } from '../middleware';
 import { OUTCOMES } from '../config';
@@ -135,7 +136,18 @@ callsRouter.get(
       req.params.id,
       ws,
     ]);
-    if (!call?.recording_sid) return res.status(404).json({ error: 'No recording for this call' });
+    if (!call?.recording_sid && !call?.recording_path) return res.status(404).json({ error: 'No recording for this call' });
+
+    // Prefer our own copy: no Twilio round-trip, works even after we delete theirs.
+    if (call.recording_path && fs.existsSync(call.recording_path)) {
+      const stat = fs.statSync(call.recording_path);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', String(stat.size));
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      return fs.createReadStream(call.recording_path).pipe(res);
+    }
+
+    if (!call.recording_sid) return res.status(404).json({ error: 'No recording for this call' });
 
     const s = await one<any>(`select * from settings where workspace_id=$1`, [ws]);
     if (!s?.twilio_account_sid || !s?.twilio_auth_token) {

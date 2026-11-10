@@ -38,6 +38,7 @@ function publicView(s: any) {
       number: s?.telnyx_number || '',
     },
     recordingEnabled: s?.recording_enabled ?? true,
+    recordingRetentionDays: s?.recording_retention_days ?? 7,
     ringTimeoutSec: s?.ring_timeout_sec ?? 60,
     compliance: {
       enforce: s?.enforce_compliance ?? true,
@@ -95,8 +96,8 @@ settingsRouter.put(
                              twilio_api_key_sid, twilio_api_key_secret, telnyx_api_key, telnyx_connection_id,
                              telnyx_number, recording_enabled, ring_timeout_sec,
                              enforce_compliance, call_window_start, call_window_end, call_window_days,
-                             max_attempts, default_timezone, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
+                             max_attempts, default_timezone, recording_retention_days, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
        on conflict (workspace_id) do update set
          provider = excluded.provider,
          twilio_account_sid = excluded.twilio_account_sid,
@@ -115,6 +116,7 @@ settingsRouter.put(
          call_window_days = excluded.call_window_days,
          max_attempts = excluded.max_attempts,
          default_timezone = excluded.default_timezone,
+         recording_retention_days = excluded.recording_retention_days,
          updated_at = now()`,
       [
         ws,
@@ -135,6 +137,7 @@ settingsRouter.put(
         String(comp.windowDays ?? current?.call_window_days ?? '1,2,3,4,5'),
         Number(comp.maxAttempts ?? current?.max_attempts ?? 0),
         (comp.defaultTimezone ?? current?.default_timezone ?? null) || null,
+        Math.max(0, Math.min(365, Number(b.recordingRetentionDays ?? current?.recording_retention_days ?? 7))),
       ],
     );
 

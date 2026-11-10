@@ -12,6 +12,7 @@ interface SettingsShape {
   twilio: { accountSid: string; authToken: string; apiKeySid: string; apiKeySecret: string; number: string; twimlApp: string };
   telnyx: { apiKey: string; connectionId: string; number: string };
   recordingEnabled: boolean;
+  recordingRetentionDays: number;
   ringTimeoutSec: number;
   compliance: {
     enforce: boolean;
@@ -441,7 +442,9 @@ export function Settings() {
             <label className="flex items-center justify-between gap-4 text-sm">
               <span>
                 Record calls
-                <span className="block text-2xs text-muted">Stored at the provider, played back through this app.</span>
+                <span className="block text-2xs text-muted">
+                  Copied to this server after each call, then removed from Twilio.
+                </span>
               </span>
               <input
                 type="checkbox"
@@ -450,6 +453,22 @@ export function Settings() {
                 className="h-4 w-4 accent-check"
               />
             </label>
+
+            <div>
+              <label className="label">Keep the Twilio copy for (days)</label>
+              <input
+                className="field mono !w-24"
+                type="number"
+                min={0}
+                max={365}
+                value={form.recordingRetentionDays}
+                onChange={(e) => setForm({ ...form, recordingRetentionDays: Number(e.target.value) })}
+              />
+              <p className="mt-1 text-2xs text-muted">
+                Your own copy is never deleted. Twilio charges storage for every stored minute each month, so this
+                is just a safety window — after it passes, their copy is removed.
+              </p>
+            </div>
 
             <div>
               <label className="label">Ring timeout (seconds)</label>

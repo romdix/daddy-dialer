@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config';
 import { migrate, pool, seedBrandFromEnv } from './db';
 import { attachUser } from './middleware';
+import { purgeTwilioRecordings } from './recordings';
 import { authRouter } from './routes/auth';
 import { leadsRouter } from './routes/leads';
 import { sessionsRouter } from './routes/sessions';
@@ -62,7 +63,17 @@ async function main() {
   await seedBrandFromEnv();
   app.listen(config.port, () => {
     console.log(`[api] listening on :${config.port} (canonical url ${config.publicUrl || 'from request host'})`);
+    console.log(`[api] recordings directory: ${config.recordingsDir}`);
   });
+
+  // Every few hours, drop Twilio's copy of recordings we already hold locally.
+  // This is what stops the per-minute storage charge accumulating forever.
+  setTimeout(() => {
+    purgeTwilioRecordings().catch((e) => console.error('[recordings] sweep failed', e?.message));
+  }, 60_000);
+  setInterval(() => {
+    purgeTwilioRecordings().catch((e) => console.error('[recordings] sweep failed', e?.message));
+  }, 6 * 60 * 60 * 1000);
 }
 
 main().catch((e) => {
