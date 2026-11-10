@@ -144,7 +144,7 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
 
   useEffect(() => {
     setSelected([]);
-  }, [page, filters]);
+  }, [page, filters, asUserId]);
 
   const rows = query.data?.rows || [];
   const allOnPage = rows.length > 0 && rows.every((r) => selected.includes(r.id));
