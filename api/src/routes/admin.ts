@@ -262,21 +262,12 @@ adminRouter.delete(
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.deleted_at) return res.json({ ok: true, alreadyDeleted: true });
 
-    // Their leads follow the longest-standing remaining teammate so the work
-    // keeps moving. If this was the last account the leads stay on the deleted
-    // user — still reachable from the deleted list.
-    const fallback = await one<{ id: string }>(
-      `select id from users where id <> $1 and deleted_at is null order by created_at asc limit 1`,
-      [id],
-    );
-    if (fallback) {
-      await q(`update leads set assigned_user_id=$2, updated_at=now() where assigned_user_id=$1`, [id, fallback.id]);
-    }
-
+    // Their leads stay attached to the account: hidden with it, never handed to
+    // somebody else. Nothing is reassigned and nothing is destroyed.
     await q(`update users set deleted_at=now(), is_active=false, updated_at=now() where id=$1`, [id]);
     await q(`delete from auth_sessions where user_id=$1`, [id]);
 
-    res.json({ ok: true, leadsMovedTo: fallback?.id || null });
+    res.json({ ok: true });
   }),
 );
 

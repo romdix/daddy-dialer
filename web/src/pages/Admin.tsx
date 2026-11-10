@@ -963,8 +963,8 @@ function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
       <div className="panel border-red-950/60 p-4 lg:col-span-2">
         <h2 className="text-sm font-semibold text-red-300">Danger zone</h2>
         <p className="mt-1 text-2xs text-muted">
-          Deleting signs them out and hides the account. Their name stays on past calls, and their leads move to the
-          longest-standing teammate — or stay with them if they are the last account.
+          Deleting signs them out and hides the account. Their name stays on past calls, and their leads stay with
+          them — out of the way, not handed to anyone else.
         </p>
         {user.deletedAt ? (
           <div className="mt-3 flex flex-wrap items-center gap-3">
