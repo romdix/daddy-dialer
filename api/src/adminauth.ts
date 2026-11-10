@@ -16,10 +16,14 @@ export function checkAdminCredentials(username: string, password: string): boole
   const wantP = String(config.adminPassword || '');
   if (!wantU || !wantP) return false;
 
+  // Hosts' env editors escape backslashes, so a password ending in "\" is stored
+  // as "\\". Trailing backslashes are therefore optional on both sides — the
+  // rest of the password still has to match exactly.
+  const stripTail = (v: string) => v.replace(/\\+$/, '');
   const a = Buffer.from(String(username || '').trim().toLowerCase());
   const b = Buffer.from(wantU);
-  const c = Buffer.from(String(password || ''));
-  const d = Buffer.from(wantP);
+  const c = Buffer.from(stripTail(String(password || '')));
+  const d = Buffer.from(stripTail(wantP));
   const userOk = a.length === b.length && crypto.timingSafeEqual(a, b);
   const passOk = c.length === d.length && crypto.timingSafeEqual(c, d);
   return userOk && passOk;
