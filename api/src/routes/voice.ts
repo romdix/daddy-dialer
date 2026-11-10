@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import fs from 'node:fs';
 import { q, one } from '../db';
 import { requireAuth, wrap } from '../middleware';
 import { dec } from '../crypto';
@@ -8,6 +9,14 @@ import { normalizePhone, toE164 } from '../filters';
 import { checkCallable } from '../compliance';
 import { ensureApiKey } from '../twiliokey';
 import { attachLocalCopy, copyRecordingToDisk } from '../recordings';
+import {
+  deleteVoicemailAudio,
+  hasVoicemailAudio,
+  saveVoicemailAudio,
+  tokenMatches,
+  voicemailPath,
+  voicemailToken,
+} from '../voicemail';
 
 export const voiceRouter = Router();
 
@@ -221,7 +230,7 @@ voiceRouter.post(
     const s = await loadSettings(workspaceId);
     const p = getProvider(call.provider);
     const settingsRow = await one<any>(
-      `select recording_enabled, ring_timeout_sec, amd_enabled from settings where workspace_id=$1`,
+      `select recording_enabled, ring_timeout_sec, amd_enabled, voicemail_drop_enabled from settings where workspace_id=$1`,
       [workspaceId],
     );
 
@@ -254,6 +263,7 @@ voiceRouter.post(
       record: settingsRow?.recording_enabled !== false,
       ringTimeout: settingsRow?.ring_timeout_sec || 60,
       detectVoicemail: settingsRow?.amd_enabled !== false,
+      voicemailDrop: settingsRow?.voicemail_drop_enabled === true,
     };
 
     // No conference support (e.g. Telnyx) -> legacy single-leg markup.
@@ -294,6 +304,7 @@ voiceRouter.post(
           publicUrl,
           ringTimeout: request.ringTimeout,
           detectVoicemail: request.detectVoicemail,
+          voicemailDrop: request.voicemailDrop,
         });
         await q(`update call_logs set lead_call_sid=$2, provider_call_id=$2 where id=$1`, [callLogId, r.sid]);
         console.log('[voice] lead dialed', callLogId.slice(0, 8), r.sid);
@@ -377,6 +388,24 @@ voiceRouter.post(
             where session_id=$1 and lead_id=$2`,
           [call.session_id, call.lead_id],
         );
+      }
+
+      // The lead is gone — free the agent's leg too, so nobody sits in an empty
+      // room. Slight delay: during a voicemail drop the lead is redirected out
+      // of the conference and must not be cut off mid-message.
+      const agentSid = String(call.agent_call_sid || '');
+      if (agentSid.startsWith('CA')) {
+        setTimeout(() => {
+          (async () => {
+            try {
+              const s2 = await loadSettings(call.workspace_id);
+              const p2 = getProvider(call.provider);
+              await p2.endCall?.(s2, agentSid);
+            } catch {
+              /* the browser will hang up on its own */
+            }
+          })();
+        }, 2000);
       }
       return;
     }
@@ -541,8 +570,8 @@ voiceRouter.post(
     if (!call) return;
 
     if (/^machine_|^fax/i.test(answeredBy)) {
-      // A machine answered: log it as a voicemail and drop the leg so the agent
-      // is not stuck listening to a greeting.
+      // A machine answered: log it as a voicemail, then either play our message
+      // into it or drop the leg so the agent isn't stuck listening to a greeting.
       await q(`update call_logs set answered_by=$2, outcome=coalesce(outcome,'voicemail') where id=$1`, [
         callLogId,
         answeredBy,
@@ -550,19 +579,137 @@ voiceRouter.post(
       if (call.lead_id) {
         await q(`update leads set outcome='voicemail', status='in_progress', updated_at=now() where id=$1`, [call.lead_id]);
       }
+
+      const leadSid = String(call.lead_call_sid || '');
+      const agentSid = String(call.agent_call_sid || '');
+
       try {
         const s = await loadSettings(call.workspace_id);
         const p = getProvider(call.provider);
-        if (p.endCall && String(call.lead_call_sid || '').startsWith('CA')) {
-          await p.endCall(s, call.lead_call_sid);
+        const cfg = await one<any>(
+          `select voicemail_drop_enabled, voicemail_script from settings where workspace_id=$1`,
+          [call.workspace_id],
+        );
+        const dropReady =
+          cfg?.voicemail_drop_enabled === true &&
+          (hasVoicemailAudio(call.workspace_id) || String(cfg?.voicemail_script || '').trim().length > 0);
+
+        if (dropReady && p.redirectCall && leadSid.startsWith('CA')) {
+          const qs = `callLogId=${encodeURIComponent(callLogId)}&workspaceId=${encodeURIComponent(call.workspace_id)}`;
+          await p.redirectCall(s, leadSid, `${baseUrl(req)}/api/voice/voicemail-twiml?${qs}`);
+          console.log('[voice] voicemail drop', callLogId.slice(0, 8), answeredBy);
+          // Give the redirect a moment to take hold, then release the agent.
+          if (p.endCall && agentSid.startsWith('CA')) {
+            setTimeout(() => {
+              p.endCall!(s, agentSid).catch(() => {});
+            }, 2500);
+          }
+        } else if (p.endCall && leadSid.startsWith('CA')) {
+          await p.endCall(s, leadSid);
         }
       } catch (e: any) {
-        console.error('[voice] amd hangup failed', e?.message);
+        console.error('[voice] amd handling failed', e?.message);
       }
       return;
     }
 
     await q(`update call_logs set answered_by=$2 where id=$1`, [callLogId, answeredBy]);
+  }),
+);
+
+/* ------------------------------------------------------------------------- *
+ * Voicemail drop
+ * ------------------------------------------------------------------------- */
+
+async function voicemailConfig(ws: string) {
+  const s = await one<any>(`select voicemail_drop_enabled, voicemail_script from settings where workspace_id=$1`, [ws]);
+  const withAudio = hasVoicemailAudio(ws);
+  return {
+    enabled: s?.voicemail_drop_enabled ?? false,
+    script: s?.voicemail_script || '',
+    hasAudio: withAudio,
+    audioUrl: withAudio
+      ? `/api/voice/voicemail-audio?ws=${encodeURIComponent(ws)}&t=${voicemailToken(ws)}`
+      : null,
+  };
+}
+
+voiceRouter.get(
+  '/voicemail',
+  requireAuth,
+  wrap(async (req, res) => {
+    res.json(await voicemailConfig(req.ctx!.workspaceId));
+  }),
+);
+
+voiceRouter.put(
+  '/voicemail',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const b = req.body || {};
+
+    if (b.removeAudio === true) deleteVoicemailAudio(ws);
+    if (typeof b.audioBase64 === 'string' && b.audioBase64.length > 100) {
+      try {
+        saveVoicemailAudio(ws, b.audioBase64);
+      } catch (e: any) {
+        return res.status(400).json({ error: e?.message || 'Could not save that audio file' });
+      }
+    }
+
+    const script = typeof b.script === 'string' ? b.script.slice(0, 2000) : '';
+    await q(
+      `update settings set voicemail_drop_enabled=$2, voicemail_script=$3, updated_at=now() where workspace_id=$1`,
+      [ws, Boolean(b.enabled), script || null],
+    );
+    res.json(await voicemailConfig(ws));
+  }),
+);
+
+/** Twilio fetches the uploaded greeting. Token-protected, no login. */
+voiceRouter.get(
+  '/voicemail-audio',
+  wrap(async (req, res) => {
+    const ws = String(req.query.ws || '');
+    const token = String(req.query.t || '');
+    if (!isUuid(ws) || !tokenMatches(ws, token)) return res.status(403).end();
+    const file = voicemailPath(ws);
+    if (!fs.existsSync(file)) return res.status(404).end();
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', String(fs.statSync(file).size));
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    fs.createReadStream(file).pipe(res);
+  }),
+);
+
+/** The lead's call is redirected here once a machine is detected. */
+voiceRouter.post(
+  '/voicemail-twiml',
+  wrap(async (req, res) => {
+    const callLogId = String(req.query.callLogId || '');
+    const workspaceId = String(req.query.workspaceId || '');
+    const xml = (s: string) => res.type('text/xml').send(s);
+
+    if (!isUuid(callLogId) || !isUuid(workspaceId)) {
+      return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+    }
+
+    const s = await one<any>(`select voicemail_script from settings where workspace_id=$1`, [workspaceId]);
+    let body: string;
+    if (hasVoicemailAudio(workspaceId)) {
+      const url = `${baseUrl(req)}/api/voice/voicemail-audio?ws=${encodeURIComponent(workspaceId)}&t=${voicemailToken(
+        workspaceId,
+      )}`;
+      body = `<Play>${xmlEscape(url)}</Play>`;
+    } else if (String(s?.voicemail_script || '').trim()) {
+      body = `<Say voice="alice">${xmlEscape(String(s!.voicemail_script).trim())}</Say>`;
+    } else {
+      body = '<Say voice="alice">Sorry we missed you. We will try again another time.</Say>';
+    }
+
+    console.log('[voice] voicemail message played', callLogId.slice(0, 8));
+    xml(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}<Hangup/></Response>`);
   }),
 );
 

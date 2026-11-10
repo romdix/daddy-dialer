@@ -99,6 +99,12 @@ export const twilioProvider: DialerProvider = {
     await c.calls(callSid).update({ status: 'completed' });
   },
 
+  /** Send a live call to new instructions (used for the voicemail drop). */
+  async redirectCall(s, callSid, url) {
+    const c = client(s);
+    await c.calls(callSid).update({ url, method: 'POST' });
+  },
+
   /**
    * What the AGENT's browser gets when it connects. It joins the conference room
    * immediately, so the media path is live before the lead's phone even rings.
@@ -129,10 +135,13 @@ export const twilioProvider: DialerProvider = {
    */
   leadMarkup(r: OutboundRequest) {
     const room = conferenceRoom(r.callLogId);
+    // endConferenceOnExit=false on purpose: when the lead is pulled out for a
+    // voicemail drop we redirect their leg, and tearing the room down first
+    // would cut the message off. The server ends the agent's leg afterwards.
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial>
-    <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">${xmlEscape(room)}</Conference>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false" beep="false">${xmlEscape(room)}</Conference>
   </Dial>
 </Response>`;
   },
@@ -157,7 +166,9 @@ export const twilioProvider: DialerProvider = {
       ...(o.detectVoicemail === false
         ? {}
         : {
-            machineDetection: 'Enable' as const,
+            // For a drop we must wait for the greeting to finish, otherwise the
+            // message plays over the top of it and gets cut off.
+            machineDetection: (o.voicemailDrop ? 'DetectMessageEnd' : 'Enable') as 'DetectMessageEnd' | 'Enable',
             asyncAmd: 'true',
             asyncAmdStatusCallback: `${o.publicUrl}/api/voice/amd?${qs}`,
             asyncAmdStatusCallbackMethod: 'POST',

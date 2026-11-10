@@ -195,6 +195,53 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
     else ringback.current.stop();
   }, [status]);
 
+  // Ring pattern while an inbound call waits to be answered.
+  useEffect(() => {
+    if (!incoming) return;
+    let ctx: AudioContext | null = null;
+    let stopped = false;
+    let timer: any = null;
+    try {
+      const AC = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return;
+      ctx = new AC();
+      const beep = () => {
+        if (stopped || !ctx) return;
+        try {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.frequency.value = 440;
+          gain.gain.value = 0.05;
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          setTimeout(() => {
+            try {
+              osc.stop();
+            } catch {
+              /* already stopped */
+            }
+          }, 700);
+        } catch {
+          /* ignore */
+        }
+      };
+      beep();
+      timer = setInterval(beep, 2600);
+    } catch {
+      /* no audio available */
+    }
+    return () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      try {
+        ctx?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [incoming]);
+
   const refreshInputs = useCallback(async () => {
     try {
       const list = await navigator.mediaDevices.enumerateDevices();

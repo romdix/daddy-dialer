@@ -65,6 +65,7 @@ export function SessionDialer() {
   const [toast, setToast] = useState<string | null>(null);
   const [callbackFor, setCallbackFor] = useState<string | null>(null);
   const [callbackAt, setCallbackAt] = useState('');
+  const [note, setNote] = useState('');
 
   const { data, refetch } = useQuery<{ session: any; leads: Row[] }>({
     queryKey: ['session', id],
@@ -141,6 +142,9 @@ export function SessionDialer() {
 
   const applyOutcome = useCallback(
     async (call: EndedCall, outcome: string, cbAt?: string) => {
+      if (note.trim()) {
+        await api.patch(`/api/calls/${call.callLogId}`, { notes: note.trim() }).catch(() => {});
+      }
       await api.patch(`/api/calls/${call.callLogId}/outcome`, { outcome });
       if (cbAt && call.leadId) {
         await api.patch(`/api/leads/${call.leadId}`, { callback_at: new Date(cbAt).toISOString() });
@@ -148,6 +152,7 @@ export function SessionDialer() {
       setEnded(null);
       setCallbackFor(null);
       setCallbackAt('');
+      setNote('');
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['calls'] });
       qc.invalidateQueries({ queryKey: ['callbacks'] });
@@ -422,6 +427,12 @@ export function SessionDialer() {
                   </button>
                 ))}
               </div>
+              <textarea
+                className="field mt-3 min-h-[52px] text-xs"
+                placeholder="Note (optional) — saved against this call"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
               <button
                 className="mt-3 text-2xs text-muted underline hover:text-zinc-300"
                 onClick={() => advance(ended.leadIndex)}

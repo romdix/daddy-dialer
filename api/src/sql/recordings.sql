@@ -9,3 +9,7 @@ alter table settings add column if not exists recording_retention_days int not n
 
 -- Answering-machine detection is billed per call, so it must be switchable.
 alter table settings add column if not exists amd_enabled boolean not null default true;
+
+-- Voicemail drop: play a message into the machine instead of hanging up.
+alter table settings add column if not exists voicemail_drop_enabled boolean not null default false;
+alter table settings add column if not exists voicemail_script text;

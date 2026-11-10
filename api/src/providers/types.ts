@@ -42,6 +42,7 @@ export interface DialerProvider {
   leadMarkup?(r: OutboundRequest): string;
   pointNumberAtInbound?(s: ProviderSettings, number: string, publicUrl: string): Promise<{ ok: boolean; reason?: string; sid?: string }>;
   endCall?(s: ProviderSettings, callSid: string): Promise<void>;
+  redirectCall?(s: ProviderSettings, callSid: string, url: string): Promise<void>;
   dialIntoConference?(
     s: ProviderSettings,
     o: {
@@ -52,6 +53,7 @@ export interface DialerProvider {
       publicUrl: string;
       ringTimeout?: number;
       detectVoicemail?: boolean;
+      voicemailDrop?: boolean;
     },
   ): Promise<{ sid: string }>;
   /** Normalized numbers the workspace can call from. */
