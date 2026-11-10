@@ -127,17 +127,31 @@ leadsRouter.get(
   '/export.csv',
   requireAuth,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
-    const rows = await q<any>(
-      `select business_name, phone, address, city, state, zip, website, email,
-              status, coalesce(outcome,'') as outcome, attempts,
-              to_char(last_called_at,'YYYY-MM-DD HH24:MI:SS') as last_called_at,
-              to_char(callback_at,'YYYY-MM-DD HH24:MI:SS') as callback_at,
-              coalesce(notes,'') as notes,
-              to_char(created_at,'YYYY-MM-DD HH24:MI:SS') as created_at
-         from leads where workspace_id=$1 order by created_at asc limit 100000`,
-      [ws],
-    );
+    const ws = (req as any).ws || req.ctx!.workspaceId;
+    // Staff export only their own leads; the admin exports the whole workspace.
+    const owner = req.ctx?.userId || null;
+    const rows = owner
+      ? await q<any>(
+          `select business_name, phone, address, city, state, zip, website, email,
+                  status, coalesce(outcome,'') as outcome, attempts,
+                  to_char(last_called_at,'YYYY-MM-DD HH24:MI:SS') as last_called_at,
+                  to_char(callback_at,'YYYY-MM-DD HH24:MI:SS') as callback_at,
+                  coalesce(notes,'') as notes,
+                  to_char(created_at,'YYYY-MM-DD HH24:MI:SS') as created_at
+             from leads where workspace_id=$1 and assigned_user_id=$2
+            order by created_at asc limit 100000`,
+          [ws, owner],
+        )
+      : await q<any>(
+          `select business_name, phone, address, city, state, zip, website, email,
+                  status, coalesce(outcome,'') as outcome, attempts,
+                  to_char(last_called_at,'YYYY-MM-DD HH24:MI:SS') as last_called_at,
+                  to_char(callback_at,'YYYY-MM-DD HH24:MI:SS') as callback_at,
+                  coalesce(notes,'') as notes,
+                  to_char(created_at,'YYYY-MM-DD HH24:MI:SS') as created_at
+             from leads where workspace_id=$1 order by created_at asc limit 100000`,
+          [ws],
+        );
 
     const head = [
       'business_name', 'phone', 'address', 'city', 'state', 'zip', 'website', 'email',
@@ -200,6 +214,49 @@ leadsRouter.post(
     );
 
     res.json({ received: numbers.length, valid: list.length, marked: updated.length });
+  }),
+);
+
+const clean = (v: any) => (v == null || String(v).trim() === '' ? null : String(v).trim());
+
+leadsRouter.post(
+  '/',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const b = req.body || {};
+    const phone = String(b.phone || '').trim();
+    if (!phone) return res.status(400).json({ error: 'Phone number is required' });
+
+    const norm = normalizePhone(phone);
+    if (!norm || norm.length < 7) return res.status(400).json({ error: 'That phone number does not look usable' });
+
+    const dupe = await one(`select id from leads where workspace_id=$1 and phone_norm=$2`, [ws, norm]);
+    if (dupe) return res.status(409).json({ error: 'A lead with that phone number already exists' });
+
+    const row = await one(
+      `insert into leads (workspace_id, assigned_user_id, business_name, phone, phone_norm,
+                          address, city, state, zip, website, email, notes, status, outcome, metadata)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'{}'::jsonb)
+       returning *`,
+      [
+        ws,
+        req.ctx!.userId,
+        clean(b.business_name),
+        formatPhone(phone),
+        norm,
+        clean(b.address),
+        clean(b.city),
+        clean(b.state),
+        clean(b.zip),
+        clean(b.website),
+        clean(b.email),
+        clean(b.notes),
+        STATUSES.includes(b.status) ? b.status : 'new',
+        OUTCOMES.includes(b.outcome) ? b.outcome : null,
+      ],
+    );
+    res.json(row);
   }),
 );
 

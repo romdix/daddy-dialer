@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config';
 import { migrate, pool, seedBrandFromEnv } from './db';
 import { attachUser, attachWorkspace } from './middleware';
+import { adminAsUser } from './impersonate';
 import { purgeTwilioRecordings } from './recordings';
 import { authRouter } from './routes/auth';
 import { leadsRouter } from './routes/leads';
@@ -36,7 +37,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
-app.use('/api/leads', leadsRouter);
+app.use('/api/leads', adminAsUser, leadsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api/calls', callsRouter);
 app.use('/api/dashboard', dashboardRouter);

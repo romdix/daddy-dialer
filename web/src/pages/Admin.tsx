@@ -1,342 +1,457 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Leads } from './Leads';
 import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { VoicemailPanel } from '../components/VoicemailPanel';
 import { DataPanel } from '../components/DataPanel';
-
-function Label({ children }: { children: React.ReactNode }) {
-  return <label className="label">{children}</label>;
-}
+import { OUTCOME_LABEL, STATUS_LABEL, fmtDateTime } from '../lib/format';
 
 /* ------------------------------------------------------------------ *
- * Tiny fetch helper — admin endpoints use their own cookie.
+ * data helpers
  * ------------------------------------------------------------------ */
 
-async function adminApi<T = any>(path: string, init?: { method?: string; body?: any }): Promise<T> {
-  const res = await fetch(`/api/admin${path}`, {
-    method: init?.method || 'GET',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+async function j<T = any>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+    ...init,
   });
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { error: text.slice(0, 200) };
+  }
   if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
   return data as T;
 }
+const post = (p: string, b?: any) => j(p, { method: 'POST', body: JSON.stringify(b ?? {}) });
+const patch = (p: string, b: any) => j(p, { method: 'PATCH', body: JSON.stringify(b) });
+const del = (p: string) => j(p, { method: 'DELETE' });
 
-interface UserRow {
-  id: string;
-  email: string;
-  fullName: string | null;
-  isActive: boolean;
-  canUploadLeads: boolean;
-  canHearRecordings: boolean;
-  callerId: string | null;
-  parallelLines: number;
-  leadsAssigned: number;
-  callsToday: number;
-  callsWeek: number;
-  callsMonth: number;
-  connectsMonth: number;
-  lastCallAt: string | null;
-  createdAt: string;
+/* ------------------------------------------------------------------ *
+ * small pieces
+ * ------------------------------------------------------------------ */
+
+function initials(name?: string | null, email?: string | null) {
+  const src = (name || email || '?').trim();
+  const parts = src.split(/[\s@._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] || '?') + (parts[1]?.[0] || '')).toUpperCase();
 }
 
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
-const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
+function Avatar({ name, email, size = 36 }: { name?: string | null; email?: string | null; size?: number }) {
+  return (
+    <div
+      className="flex shrink-0 items-center justify-center rounded-full border border-ink-600 bg-ink-800 font-medium text-zinc-300"
+      style={{ width: size, height: size, fontSize: size * 0.36 }}
+    >
+      {initials(name, email)}
+    </div>
+  );
+}
+
+function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
+  return (
+    <div className="panel px-4 py-3">
+      <p className="text-2xs uppercase tracking-wider text-muted">{label}</p>
+      <p className="mt-1 mono text-xl text-zinc-100">{value}</p>
+      {hint && <p className="mt-0.5 text-2xs text-zinc-600">{hint}</p>}
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  hint,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className={`flex items-start justify-between gap-4 py-3 ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+      <span>
+        <span className="block text-sm text-zinc-200">{label}</span>
+        {hint && <span className="mt-0.5 block text-2xs text-muted">{hint}</span>}
+      </span>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full border transition-colors ${
+          checked ? 'border-accent/60 bg-accent/30' : 'border-ink-600 bg-ink-800'
+        }`}
+        aria-pressed={checked}
+      >
+        <span
+          className={`absolute top-0.5 h-3.5 w-3.5 rounded-full transition-all ${
+            checked ? 'left-[18px] bg-accent' : 'left-0.5 bg-zinc-500'
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
+function Pill({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 'ok' | 'off' | 'warn' | 'muted' }) {
+  const tones: Record<string, string> = {
+    ok: 'border-emerald-800/60 bg-emerald-950/40 text-emerald-300',
+    off: 'border-ink-600 bg-ink-800 text-zinc-400',
+    warn: 'border-amber-800/60 bg-amber-950/30 text-amber-300',
+    muted: 'border-ink-700 bg-ink-900 text-zinc-400',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-2xs ${tones[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+function Bars({ data }: { data: { day: string; calls: number; answered: number }[] }) {
+  const max = Math.max(1, ...data.map((d) => d.calls));
+  return (
+    <div className="flex h-32 items-end gap-1.5">
+      {data.map((d) => (
+        <div key={d.day} className="group relative flex flex-1 flex-col justify-end gap-0.5" title={`${d.day}: ${d.calls} calls, ${d.answered} answered`}>
+          <div className="relative w-full rounded-t-sm bg-ink-700/70" style={{ height: `${(d.calls / max) * 100}%`, minHeight: d.calls ? 3 : 1 }}>
+            <div
+              className="absolute bottom-0 w-full rounded-t-sm bg-accent/70"
+              style={{ height: d.calls ? `${(d.answered / d.calls) * 100}%` : 0 }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const fmtTalk = (sec: number) => {
+  const s = Number(sec || 0);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+
+/* ------------------------------------------------------------------ *
+ * admin shell
+ * ------------------------------------------------------------------ */
+
+type Session = { configured: boolean; signedIn: boolean };
+type View =
+  | { kind: 'overview' }
+  | { kind: 'users' }
+  | { kind: 'user'; id: string }
+  | { kind: 'calls' }
+  | { kind: 'settings' };
 
 export function Admin() {
-  const [session, setSession] = useState<{ configured: boolean; signedIn: boolean } | null>(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<'overview' | 'users' | 'leads' | 'calls' | 'settings'>('overview');
-  const [openUser, setOpenUser] = useState<string | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [view, setView] = useState<View>({ kind: 'overview' });
 
-  const check = useCallback(async () => {
+  const loadSession = useCallback(async () => {
     try {
-      const s = await fetch('/api/admin/session', { credentials: 'include' }).then((r) => r.json());
-      setSession(s);
+      setSession(await j<Session>('/api/admin/session'));
     } catch {
       setSession({ configured: false, signedIn: false });
     }
   }, []);
 
   useEffect(() => {
-    check();
-  }, [check]);
+    loadSession();
+  }, [loadSession]);
 
-  const login = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr(null);
-    try {
-      await adminApi('/login', { method: 'POST', body: { username: email, password } });
-      await check();
-    } catch (e: any) {
-      setErr(e?.message || 'Could not sign in');
-    }
-  };
-
-  if (!session) return <div className="p-10 text-sm text-muted">Loading…</div>;
+  if (!session) return <Splash />;
 
   if (!session.configured) {
     return (
-      <div className="mx-auto max-w-lg p-10">
-        <div className="panel p-5">
-          <h1 className="text-sm font-semibold">Admin login is not configured</h1>
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="panel max-w-md p-6">
+          <h1 className="text-sm font-semibold">Admin is not configured</h1>
           <p className="mt-2 text-xs text-muted">
-            Set <span className="mono">ADMIN_USERNAME</span> and <span className="mono">ADMIN_PASSWORD</span> in your
-            host's environment (Coolify → this app → Environment Variables), redeploy, then reload this page.
+            Set <span className="mono text-zinc-300">ADMIN_USERNAME</span> and{' '}
+            <span className="mono text-zinc-300">ADMIN_PASSWORD</span> on the server, then redeploy.
           </p>
         </div>
       </div>
     );
   }
 
-  if (!session.signedIn) {
-    return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="w-full max-w-sm">
-          <div className="panel p-5">
-            <h1 className="text-sm font-semibold">Administrator</h1>
-            <p className="mt-1 text-xs text-muted">Manage users, leads and settings.</p>
-            <form onSubmit={login} className="mt-4 space-y-3">
-              <div>
-                <Label>Username</Label>
-                <input className="field" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
-              </div>
-              <div>
-                <Label>Password</Label>
-                <input
-                  className="field"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </div>
-              {err && <p className="rounded border border-red-900/50 bg-red-950/30 px-2.5 py-2 text-xs text-red-300">{err}</p>}
-              <button className="btn-primary w-full">Sign in</button>
-            </form>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (!session.signedIn) return <AdminLogin onDone={loadSession} />;
+
+  const signOut = async () => {
+    await post('/api/admin/logout');
+    setView({ kind: 'overview' });
+    loadSession();
+  };
+
+  const nav: { key: View['kind']; label: string }[] = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'users', label: 'Users' },
+    { key: 'calls', label: 'Calls' },
+    { key: 'settings', label: 'Settings' },
+  ];
 
   return (
     <div className="min-h-screen">
-      <header className="flex items-center gap-4 border-b border-ink-800 px-6 py-3">
-        <span className="text-sm font-semibold">Administrator</span>
-        <nav className="flex gap-1">
-          {(['overview', 'users', 'leads', 'calls', 'settings'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => {
-                setTab(t);
-                setOpenUser(null);
-              }}
-              className={`rounded px-3 py-1.5 text-xs capitalize ${
-                tab === t ? 'bg-ink-800 text-white' : 'text-muted hover:text-white'
-              }`}
-            >
-              {t}
+      <header className="sticky top-0 z-20 border-b border-ink-800 bg-ink-950/95 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-6">
+          <div className="flex items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded bg-accent/15 text-2xs font-bold text-accent">
+              A
+            </div>
+            <span className="text-sm font-semibold tracking-tight">Admin</span>
+          </div>
+
+          <nav className="flex items-center gap-1">
+            {nav.map((n) => (
+              <button
+                key={n.key}
+                onClick={() => setView({ kind: n.key } as View)}
+                className={`rounded px-3 py-1.5 text-xs transition-colors ${
+                  view.kind === n.key || (n.key === 'users' && view.kind === 'user')
+                    ? 'bg-ink-800 text-zinc-100'
+                    : 'text-muted hover:text-zinc-200'
+                }`}
+              >
+                {n.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-3">
+            <a href="/" className="text-xs text-muted hover:text-zinc-200">
+              Open dialer ↗
+            </a>
+            <button className="btn-ghost !py-1.5 text-xs" onClick={signOut}>
+              Sign out
             </button>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-3">
-          <a href="/" className="text-2xs text-muted hover:text-accent">
-            Open dialer ↗
-          </a>
-          <button
-            className="text-2xs text-muted hover:text-red-400"
-            onClick={async () => {
-              await adminApi('/logout', { method: 'POST' });
-              check();
-            }}
-          >
-            Sign out
-          </button>
+          </div>
         </div>
       </header>
 
-      <main className="p-6">
-        {tab === 'overview' && <Overview onOpenUser={(id) => { setOpenUser(id); setTab('users'); }} />}
-        {tab === 'users' && <Users openUserId={openUser} setOpenUserId={setOpenUser} />}
-        {tab === 'leads' && <Leads />}
-        {tab === 'calls' && <Calls />}
-        {tab === 'settings' && <AdminSettings />}
+      <main className="mx-auto max-w-7xl px-6 py-6">
+        {view.kind === 'overview' && <Overview onOpenUser={(id) => setView({ kind: 'user', id })} />}
+        {view.kind === 'users' && (
+          <Users onOpenUser={(id) => setView({ kind: 'user', id })} onChanged={loadSession} />
+        )}
+        {view.kind === 'user' && <UserPage id={view.id} onBack={() => setView({ kind: 'users' })} />}
+        {view.kind === 'calls' && <Calls />}
+        {view.kind === 'settings' && <AdminSettings />}
       </main>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-
-function Stat({ label, value }: { label: string; value: string | number }) {
+function Splash() {
   return (
-    <div className="panel px-4 py-3">
-      <p className="text-2xs uppercase tracking-wider text-muted">{label}</p>
-      <p className="mono mt-1 text-xl">{value}</p>
+    <div className="flex min-h-screen items-center justify-center text-sm text-muted">
+      <span className="mr-2 h-3 w-3 animate-spin rounded-full border-2 border-zinc-700 border-t-accent" />
+      Loading…
     </div>
   );
 }
 
-function Overview({ onOpenUser }: { onOpenUser: (id: string) => void }) {
-  const [data, setData] = useState<{ users: UserRow[]; totals: any } | null>(null);
+function AdminLogin({ onDone }: { onDone: () => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    adminApi('/overview').then(setData).catch(() => setData({ users: [], totals: {} }));
-  }, []);
-
-  if (!data) return <p className="text-sm text-muted">Loading…</p>;
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await post('/api/admin/login', { username, password });
+      onDone();
+    } catch (e: any) {
+      setError(e?.message || 'Could not sign in');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Users" value={data.users.length} />
-        <Stat label="Leads" value={data.totals?.leads ?? 0} />
-        <Stat label="Unassigned leads" value={data.totals?.unassigned ?? 0} />
-        <Stat label="Calls today" value={data.totals?.calls_today ?? 0} />
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <form onSubmit={submit} className="panel w-full max-w-sm p-6">
+        <h1 className="text-base font-semibold">Admin sign in</h1>
+        <p className="mt-1 text-xs text-muted">Platform administration for this dialer.</p>
+
+        <div className="mt-5 space-y-3">
+          <div>
+            <label className="label">Username</label>
+            <input
+              className="field"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input
+              className="field"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </div>
+        </div>
+
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+
+        <button className="btn-primary mt-5 w-full !py-2 text-sm" disabled={busy}>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * overview
+ * ------------------------------------------------------------------ */
+
+function Overview({ onOpenUser }: { onOpenUser: (id: string) => void }) {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    j('/api/admin/overview').then(setData).catch(() => setData({ users: [], totals: {} }));
+  }, []);
+
+  if (!data) return <Splash />;
+  const t = data.totals || {};
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">Overview</h1>
+        <p className="mt-0.5 text-xs text-muted">Everyone on the phones and what they have done.</p>
       </div>
 
-      <div className="panel overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-ink-900 text-2xs uppercase tracking-wider text-muted">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Team" value={data.users.length} hint={`${data.users.filter((u: any) => u.isActive).length} active`} />
+        <Stat label="Leads" value={(t.leads || 0).toLocaleString()} hint={`${t.unassigned || 0} unassigned`} />
+        <Stat label="Calls today" value={(t.calls_today || 0).toLocaleString()} />
+        <Stat label="Calls this month" value={(t.calls_month || 0).toLocaleString()} />
+      </div>
+
+      <UserTable rows={data.users} onOpenUser={onOpenUser} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * users
+ * ------------------------------------------------------------------ */
+
+function UserTable({ rows, onOpenUser }: { rows: any[]; onOpenUser: (id: string) => void }) {
+  const [q, setQ] = useState('');
+  const filtered = useMemo(
+    () =>
+      rows.filter((u) =>
+        `${u.fullName || ''} ${u.email}`.toLowerCase().includes(q.trim().toLowerCase()),
+      ),
+    [rows, q],
+  );
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-ink-800 px-4 py-3">
+        <h2 className="text-sm font-semibold">Team</h2>
+        <input
+          className="field !w-56 !py-1.5 text-xs"
+          placeholder="Search name or email"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-ink-900">
             <tr>
-              <th className="px-3 py-2 text-left">User</th>
-              <th className="px-3 py-2 text-right">Leads</th>
-              <th className="px-3 py-2 text-right">Today</th>
-              <th className="px-3 py-2 text-right">Week</th>
-              <th className="px-3 py-2 text-right">Month</th>
-              <th className="px-3 py-2 text-right">Connects</th>
-              <th className="px-3 py-2 text-left">Last call</th>
+              <th className="th">Person</th>
+              <th className="th">Status</th>
+              <th className="th text-right">Today</th>
+              <th className="th text-right">7 days</th>
+              <th className="th text-right">Answer %</th>
+              <th className="th text-right">Leads</th>
+              <th className="th">Last call</th>
+              <th className="th"></th>
             </tr>
           </thead>
           <tbody>
-            {data.users.map((u) => (
-              <tr key={u.id} className="border-t border-ink-800 hover:bg-ink-900/60 cursor-pointer" onClick={() => onOpenUser(u.id)}>
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`h-1.5 w-1.5 rounded-full ${u.isActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                    <span>{u.fullName || u.email}</span>
-                    <span className="text-2xs text-muted">{u.email}</span>
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-right mono">{u.leadsAssigned}</td>
-                <td className="px-3 py-2 text-right mono">{u.callsToday}</td>
-                <td className="px-3 py-2 text-right mono">{u.callsWeek}</td>
-                <td className="px-3 py-2 text-right mono">{u.callsMonth}</td>
-                <td className="px-3 py-2 text-right mono">
-                  {u.connectsMonth} <span className="text-2xs text-muted">({pct(u.connectsMonth, u.callsMonth)}%)</span>
-                </td>
-                <td className="px-3 py-2 text-2xs text-muted">{fmt(u.lastCallAt)}</td>
-              </tr>
-            ))}
-            {!data.users.length && (
-              <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-xs text-muted">
-                  No users yet — create one in the Users tab.
-                </td>
-              </tr>
-            )}
+            {filtered.map((u) => {
+              const rate = u.callsMonth ? Math.round((u.answeredMonth / u.callsMonth) * 100) : 0;
+              return (
+                <tr key={u.id} className="cursor-pointer hover:bg-ink-800/40" onClick={() => onOpenUser(u.id)}>
+                  <td className="td">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar name={u.fullName} email={u.email} size={30} />
+                      <div className="min-w-0">
+                        <p className="truncate text-zinc-200">{u.fullName || 'Unnamed'}</p>
+                        <p className="truncate text-2xs text-muted">{u.email}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="td">
+                    {u.isActive ? <Pill tone="ok">active</Pill> : <Pill tone="off">disabled</Pill>}
+                  </td>
+                  <td className="td text-right mono">{u.callsToday}</td>
+                  <td className="td text-right mono text-zinc-400">{u.callsWeek}</td>
+                  <td className="td text-right mono text-zinc-400">{rate}%</td>
+                  <td className="td text-right mono text-zinc-400">{u.leadsAssigned}</td>
+                  <td className="td text-2xs text-zinc-500">{u.lastCallAt ? fmtDateTime(u.lastCallAt) : '—'}</td>
+                  <td className="td text-right text-muted">→</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+      {filtered.length === 0 && <p className="px-4 py-10 text-center text-xs text-muted">Nobody matches that search.</p>}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-
-function Users({ openUserId, setOpenUserId }: { openUserId: string | null; setOpenUserId: (v: string | null) => void }) {
-  const [rows, setRows] = useState<UserRow[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [detail, setDetail] = useState<any>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+function Users({ onOpenUser, onChanged }: { onOpenUser: (id: string) => void; onChanged: () => void }) {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const load = useCallback(() => {
-    adminApi<{ rows: UserRow[] }>('/users').then((r) => setRows(r.rows)).catch(() => setRows([]));
+    j('/api/admin/users').then((d) => setRows(d.rows)).catch(() => setRows([]));
   }, []);
-
   useEffect(load, [load]);
 
-  useEffect(() => {
-    if (!openUserId) {
-      setDetail(null);
-      return;
-    }
-    adminApi(`/users/${openUserId}`).then(setDetail).catch(() => setDetail(null));
-  }, [openUserId]);
-
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Users</h2>
-        <button className="btn-primary !py-1.5 text-xs" onClick={() => setCreating(true)}>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Users</h1>
+          <p className="mt-0.5 text-xs text-muted">Create people, set their permissions, open their leads.</p>
+        </div>
+        <button className="btn-primary !py-2 text-xs" onClick={() => setAdding(true)}>
           New user
         </button>
       </div>
 
-      {msg && <p className="text-2xs text-accent">{msg}</p>}
+      {rows ? <UserTable rows={rows} onOpenUser={onOpenUser} /> : <Splash />}
 
-      <div className="panel overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-ink-900 text-2xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="px-3 py-2 text-left">User</th>
-              <th className="px-3 py-2 text-left">Permissions</th>
-              <th className="px-3 py-2 text-right">Leads</th>
-              <th className="px-3 py-2 text-right">Calls (month)</th>
-              <th className="px-3 py-2 text-left">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((u) => (
-              <tr key={u.id} className="border-t border-ink-800 hover:bg-ink-900/60 cursor-pointer" onClick={() => setOpenUserId(u.id)}>
-                <td className="px-3 py-2">
-                  <div>{u.fullName || '—'}</div>
-                  <div className="text-2xs text-muted">{u.email}</div>
-                </td>
-                <td className="px-3 py-2 text-2xs text-muted">
-                  {u.canUploadLeads ? 'upload' : '—'} · {u.canHearRecordings ? 'recordings' : '—'}
-                </td>
-                <td className="px-3 py-2 text-right mono">{u.leadsAssigned}</td>
-                <td className="px-3 py-2 text-right mono">{u.callsMonth}</td>
-                <td className="px-3 py-2 text-2xs">
-                  <span className={u.isActive ? 'text-emerald-400' : 'text-red-400'}>{u.isActive ? 'active' : 'disabled'}</span>
-                </td>
-              </tr>
-            ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-xs text-muted">
-                  No users yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {detail && (
-        <UserDetail
-          detail={detail}
-          onClose={() => setOpenUserId(null)}
-          onSaved={(m) => {
-            setMsg(m);
+      {adding && (
+        <NewUserDialog
+          onClose={() => setAdding(false)}
+          onDone={() => {
+            setAdding(false);
             load();
-            adminApi(`/users/${detail.user.id}`).then(setDetail).catch(() => {});
-          }}
-        />
-      )}
-
-      {creating && (
-        <CreateUser
-          onClose={() => setCreating(false)}
-          onCreated={() => {
-            setCreating(false);
-            setMsg('User created.');
-            load();
+            onChanged();
           }}
         />
       )}
@@ -344,619 +459,678 @@ function Users({ openUserId, setOpenUserId }: { openUserId: string | null; setOp
   );
 }
 
-function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [form, setForm] = useState({ email: '', password: '', fullName: '', canUploadLeads: false, canHearRecordings: false });
-  const [err, setErr] = useState<string | null>(null);
+function NewUserDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ fullName: '', email: '', password: '', canUploadLeads: false, canHearRecordings: false });
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
     setBusy(true);
-    setErr(null);
+    setError(null);
     try {
-      await adminApi('/users', { method: 'POST', body: form });
-      onCreated();
+      await post('/api/admin/users', form);
+      onDone();
     } catch (e: any) {
-      setErr(e?.message || 'Could not create the user');
+      setError(e?.message || 'Could not create the user');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="panel w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold">New user</h3>
-        <div className="mt-3 space-y-3">
-          <div>
-            <Label>Full name</Label>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="panel w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-semibold">New user</h2>
+        <p className="mt-1 text-xs text-muted">They sign in with this email and password.</p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label">Full name</label>
             <input className="field" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
           </div>
           <div>
-            <Label>Email</Label>
+            <label className="label">Email</label>
             <input className="field" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           </div>
           <div>
-            <Label>Password</Label>
+            <label className="label">Temporary password</label>
             <input
               className="field"
               type="text"
-              placeholder="At least 8 characters"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder="at least 8 characters"
             />
           </div>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              className="accent-check"
-              checked={form.canUploadLeads}
-              onChange={(e) => setForm({ ...form, canUploadLeads: e.target.checked })}
-            />
-            Can upload leads
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              className="accent-check"
-              checked={form.canHearRecordings}
-              onChange={(e) => setForm({ ...form, canHearRecordings: e.target.checked })}
-            />
-            Can listen to recordings
-          </label>
-          {err && <p className="text-2xs text-red-400">{err}</p>}
-          <div className="flex justify-end gap-2 pt-1">
-            <button className="btn-ghost" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={submit} disabled={busy}>
-              {busy ? 'Creating…' : 'Create user'}
-            </button>
-          </div>
         </div>
-      </div>
-    </div>
-  );
-}
 
-function UserDetail({ detail, onClose, onSaved }: { detail: any; onClose: () => void; onSaved: (m: string) => void }) {
-  const u = detail.user;
-  const [form, setForm] = useState({
-    fullName: u.fullName || '',
-    isActive: u.isActive,
-    canUploadLeads: u.canUploadLeads,
-    canHearRecordings: u.canHearRecordings,
-    callerId: u.callerId || '',
-    parallelLines: u.parallelLines || 1,
-    password: '',
-  });
-  const [numbers, setNumbers] = useState<{ number: string; label: string | null; active: boolean }[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [calls, setCalls] = useState<any[]>([]);
-
-  useEffect(() => {
-    adminApi<{ rows: any[] }>('/caller-ids').then((r) => setNumbers(r.rows)).catch(() => {});
-    adminApi<{ rows: any[] }>(`/calls?userId=${u.id}&limit=20`).then((r) => setCalls(r.rows)).catch(() => {});
-  }, [u.id]);
-
-  const save = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await adminApi(`/users/${u.id}`, { method: 'PATCH', body: form });
-      onSaved('Saved.');
-      setForm({ ...form, password: '' });
-    } catch (e: any) {
-      setMsg(e?.message || 'Could not save');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (!confirm(`Delete ${u.email}? Their leads become unassigned and their call history stays.`)) return;
-    await adminApi(`/users/${u.id}`, { method: 'DELETE' });
-    onClose();
-  };
-
-  return (
-    <div className="panel p-5">
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="text-sm font-semibold">{u.fullName || u.email}</h3>
-          <p className="text-2xs text-muted">{u.email}</p>
-        </div>
-        <button className="btn-ghost !py-1 text-xs" onClick={onClose}>
-          Close
-        </button>
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Leads assigned" value={u.leadsAssigned} />
-        <Stat label="Calls today" value={u.callsToday} />
-        <Stat label="Calls this month" value={u.callsMonth} />
-        <Stat label="Connects (month)" value={`${u.connectsMonth} (${pct(u.connectsMonth, u.callsMonth)}%)`} />
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div>
-          <Label>Full name</Label>
-          <input className="field" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-        </div>
-        <div>
-          <Label>Caller ID for this user</Label>
-          <select className="field" value={form.callerId} onChange={(e) => setForm({ ...form, callerId: e.target.value })}>
-            <option value="">Rotate with everyone</option>
-            {numbers.map((n) => (
-              <option key={n.number} value={n.number}>
-                {n.number}
-                {n.label ? ` · ${n.label}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label>Parallel lines</Label>
-          <select
-            className="field"
-            value={form.parallelLines}
-            onChange={(e) => setForm({ ...form, parallelLines: Number(e.target.value) })}
-          >
-            <option value={1}>1</option>
-            <option value={2}>2</option>
-            <option value={3}>3</option>
-          </select>
-        </div>
-        <div>
-          <Label>Reset password (leave blank to keep)</Label>
-          <input
-            className="field"
-            type="text"
-            placeholder="New password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-          />
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-4">
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            className="accent-check"
-            checked={form.isActive}
-            onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-          />
-          Account active
-        </label>
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            className="accent-check"
+        <div className="mt-3 divide-y divide-ink-800 border-y border-ink-800">
+          <Toggle
             checked={form.canUploadLeads}
-            onChange={(e) => setForm({ ...form, canUploadLeads: e.target.checked })}
+            onChange={(v) => setForm({ ...form, canUploadLeads: v })}
+            label="Can upload leads"
+            hint="Shows the Import CSV button in their leads page."
           />
-          Can upload leads
-        </label>
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            className="accent-check"
+          <Toggle
             checked={form.canHearRecordings}
-            onChange={(e) => setForm({ ...form, canHearRecordings: e.target.checked })}
+            onChange={(v) => setForm({ ...form, canHearRecordings: v })}
+            label="Can listen to recordings"
+            hint="No download button either way."
           />
-          Can listen to recordings
-        </label>
-      </div>
+        </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <button className="btn-primary !py-1.5 text-xs" onClick={save} disabled={busy}>
-          {busy ? 'Saving…' : 'Save changes'}
-        </button>
-        <button className="btn-danger !py-1.5 text-xs" onClick={remove}>
-          Delete user
-        </button>
-        {msg && <span className="text-2xs text-accent">{msg}</span>}
-      </div>
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
 
-      <h4 className="mt-6 text-2xs uppercase tracking-wider text-muted">Recent calls</h4>
-      <div className="mt-2 overflow-hidden rounded border border-ink-800">
-        <table className="w-full text-xs">
-          <tbody>
-            {calls.map((c) => (
-              <tr key={c.id} className="border-b border-ink-800/60">
-                <td className="px-2 py-1.5 text-muted">{fmt(c.called_at)}</td>
-                <td className="px-2 py-1.5">{c.business_name || c.to_number}</td>
-                <td className="px-2 py-1.5 mono text-muted">{c.duration_sec}s</td>
-                <td className="px-2 py-1.5 text-muted">{c.outcome || c.status}</td>
-              </tr>
-            ))}
-            {!calls.length && (
-              <tr>
-                <td className="px-2 py-3 text-center text-muted">No calls yet.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <div className="mt-4 flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={submit} disabled={busy}>
+            {busy ? 'Creating…' : 'Create user'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * one user
+ * ------------------------------------------------------------------ */
 
-function Leads() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [search, setSearch] = useState('');
-  const [assigned, setAssigned] = useState('all');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [assignTo, setAssignTo] = useState('');
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
+  const [data, setData] = useState<any>(null);
+  const [tab, setTab] = useState<'overview' | 'leads' | 'settings' | 'calls'>('overview');
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    const qsx = `?search=${encodeURIComponent(search)}&assigned=${encodeURIComponent(assigned)}&limit=100`;
-    adminApi<{ rows: any[] }>(`/leads${qsx}`).then((r) => setRows(r.rows)).catch(() => setRows([]));
-  }, [search, assigned]);
+    j(`/api/admin/users/${id}`)
+      .then(setData)
+      .catch((e) => setError(e?.message || 'Could not load the user'));
+  }, [id]);
 
-  useEffect(() => {
-    adminApi<{ rows: UserRow[] }>('/users').then((r) => setUsers(r.rows)).catch(() => {});
-  }, []);
+  useEffect(load, [load]);
 
-  useEffect(() => {
-    const t = setTimeout(load, 250);
-    return () => clearTimeout(t);
-  }, [load]);
+  if (error) return <p className="text-xs text-red-400">{error}</p>;
+  if (!data) return <Splash />;
 
-  const toggle = (id: string) => {
-    const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelected(next);
-  };
-
-  const assign = async () => {
-    if (!selected.size) return;
-    setBusy(true);
-    try {
-      const r = await adminApi<any>('/leads/assign', {
-        method: 'POST',
-        body: { leadIds: [...selected], userId: assignTo || null },
-      });
-      setMsg(`${r.assigned} lead(s) ${assignTo ? 'assigned' : 'unassigned'}.`);
-      setSelected(new Set());
-      load();
-    } catch (e: any) {
-      setMsg(e?.message || 'Could not assign');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const importCsv = async (file: File) => {
-    setBusy(true);
-    setMsg('Importing…');
-    try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).filter((l) => l.trim());
-      if (!lines.length) throw new Error('That file is empty');
-      const split = (line: string) => line.match(/("([^"]|"")*"|[^,]*)(,|$)/g)?.map((c) => c.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"')) || [];
-      const header = split(lines[0]).map((h) => h.trim().toLowerCase());
-      const idx = (names: string[]) => header.findIndex((h) => names.includes(h));
-
-      const iPhone = idx(['phone', 'phone number', 'number', 'mobile']);
-      const iName = idx(['business_name', 'business', 'name', 'company']);
-      const iCity = idx(['city']);
-      const iState = idx(['state']);
-      const iAddr = idx(['address', 'street']);
-      if (iPhone === -1) throw new Error('No phone column found (expected a header named phone/number)');
-
-      const records = lines.slice(1).map((line) => {
-        const c = split(line);
-        return {
-          business_name: iName >= 0 ? c[iName] : '',
-          phone: c[iPhone],
-          city: iCity >= 0 ? c[iCity] : '',
-          state: iState >= 0 ? c[iState] : '',
-          address: iAddr >= 0 ? c[iAddr] : '',
-        };
-      });
-
-      const r = await adminApi<any>('/leads/import', {
-        method: 'POST',
-        body: { records, userId: assignTo || null },
-      });
-      setMsg(`Imported ${r.created} leads (${r.duplicates} duplicates, ${r.invalid} invalid).`);
-      load();
-    } catch (e: any) {
-      setMsg(e?.message || 'Import failed');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const u = data.user;
+  const answerRate = u.callsMonth ? Math.round((u.answeredMonth / u.callsMonth) * 100) : 0;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          className="field !w-64"
-          placeholder="Search business, phone, city"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <select className="field !w-52" value={assigned} onChange={(e) => setAssigned(e.target.value)}>
-          <option value="all">All leads</option>
-          <option value="unassigned">Unassigned</option>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.fullName || u.email}
-            </option>
-          ))}
-        </select>
-        <label className="btn-ghost !py-1.5 text-xs cursor-pointer">
-          {busy ? 'Working…' : 'Import CSV'}
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importCsv(f);
-              e.target.value = '';
-            }}
-          />
-        </label>
+    <div className="space-y-5">
+      <button className="text-xs text-muted hover:text-accent" onClick={onBack}>
+        ← All users
+      </button>
+
+      <div className="panel flex flex-wrap items-center gap-4 p-5">
+        <Avatar name={u.fullName} email={u.email} size={52} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h1 className="truncate text-lg font-semibold tracking-tight">{u.fullName || 'Unnamed user'}</h1>
+            {u.isActive ? <Pill tone="ok">active</Pill> : <Pill tone="off">disabled</Pill>}
+          </div>
+          <p className="mt-0.5 text-xs text-muted">{u.email}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Pill tone={u.canUploadLeads ? 'ok' : 'muted'}>{u.canUploadLeads ? 'can upload leads' : 'no uploads'}</Pill>
+            <Pill tone={u.canHearRecordings ? 'ok' : 'muted'}>
+              {u.canHearRecordings ? 'can hear recordings' : 'no recordings'}
+            </Pill>
+            <Pill tone="muted">{u.leadsAssigned} leads</Pill>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-2xs uppercase tracking-wider text-muted">Last call</p>
+          <p className="mt-0.5 text-xs text-zinc-300">{u.lastCallAt ? fmtDateTime(u.lastCallAt) : 'never'}</p>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded border border-ink-700 bg-ink-900 px-3 py-2 text-xs">
-        <span className="text-muted">{selected.size} selected</span>
-        <select className="field !w-56 !py-1 text-xs" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
-          <option value="">Unassigned</option>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.fullName || u.email}
-            </option>
-          ))}
-        </select>
-        <button className="btn-primary !py-1 text-xs" onClick={assign} disabled={!selected.size || busy}>
-          Assign
-        </button>
-        {msg && <span className="text-accent">{msg}</span>}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <Stat label="Calls today" value={u.callsToday} />
+        <Stat label="7 days" value={u.callsWeek} />
+        <Stat label="30 days" value={u.callsMonth} />
+        <Stat label="Answer rate" value={`${answerRate}%`} hint={`${u.answeredMonth} answered`} />
+        <Stat label="Conversations" value={u.connectsMonth} hint="30 days" />
+        <Stat label="Talk time" value={fmtTalk(u.talkSecMonth)} hint="30 days" />
       </div>
 
-      <div className="panel overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-ink-900 text-2xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="w-8 px-2 py-2" />
-              <th className="px-3 py-2 text-left">Business</th>
-              <th className="px-3 py-2 text-left">Phone</th>
-              <th className="px-3 py-2 text-left">City</th>
-              <th className="px-3 py-2 text-left">Assigned to</th>
-              <th className="px-3 py-2 text-left">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((l) => (
-              <tr key={l.id} className="border-t border-ink-800">
-                <td className="px-2 py-1.5">
-                  <input type="checkbox" className="accent-check" checked={selected.has(l.id)} onChange={() => toggle(l.id)} />
-                </td>
-                <td className="px-3 py-1.5">{l.business_name || '—'}</td>
-                <td className="px-3 py-1.5 mono text-muted">{l.phone}</td>
-                <td className="px-3 py-1.5 text-muted">{[l.city, l.state].filter(Boolean).join(', ')}</td>
-                <td className="px-3 py-1.5 text-2xs text-muted">{l.assigned_email || 'unassigned'}</td>
-                <td className="px-3 py-1.5 text-2xs">{l.outcome || l.status}</td>
-              </tr>
-            ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-xs text-muted">
-                  No leads match.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="flex gap-1 border-b border-ink-800">
+        {[
+          ['overview', 'Overview'],
+          ['leads', 'Assigned leads'],
+          ['settings', 'Settings & permissions'],
+          ['calls', 'Call history'],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k as any)}
+            className={`-mb-px border-b-2 px-3 py-2 text-xs transition-colors ${
+              tab === k ? 'border-accent text-zinc-100' : 'border-transparent text-muted hover:text-zinc-300'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <UserOverview data={data} />}
+      {tab === 'leads' && <Leads asUserId={u.id} />}
+      {tab === 'settings' && <UserSettings user={u} onSaved={load} />}
+      {tab === 'calls' && <UserCalls userId={u.id} />}
+    </div>
+  );
+}
+
+function UserOverview({ data }: { data: any }) {
+  const outcomes: any[] = data.outcomes || [];
+  const statuses: any[] = data.statuses || [];
+  const totalOutcomes = outcomes.reduce((s, o) => s + o.count, 0) || 1;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="panel p-4 lg:col-span-2">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Last 14 days</h2>
+          <div className="flex items-center gap-3 text-2xs text-muted">
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-sm bg-ink-700" /> calls
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-sm bg-accent/70" /> answered
+            </span>
+          </div>
+        </div>
+        <Bars data={data.daily || []} />
+        <div className="mt-2 flex justify-between text-2xs text-zinc-600">
+          <span>{data.daily?.[0]?.day}</span>
+          <span>{data.daily?.[data.daily.length - 1]?.day}</span>
+        </div>
+      </div>
+
+      <div className="panel p-4">
+        <h2 className="text-sm font-semibold">Lead status</h2>
+        <ul className="mt-3 space-y-2">
+          {statuses.length === 0 && <li className="text-xs text-muted">No leads assigned yet.</li>}
+          {statuses.map((s) => (
+            <li key={s.status} className="flex items-center justify-between text-xs">
+              <span className="text-zinc-400">{STATUS_LABEL[s.status] || s.status}</span>
+              <span className="mono text-zinc-200">{s.count}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="panel p-4 lg:col-span-2">
+        <h2 className="text-sm font-semibold">Outcomes · 30 days</h2>
+        <ul className="mt-3 space-y-2">
+          {outcomes.length === 0 && <li className="text-xs text-muted">No calls in the last 30 days.</li>}
+          {outcomes.map((o) => (
+            <li key={o.outcome} className="text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400">{o.outcome === 'none' ? 'No outcome' : OUTCOME_LABEL[o.outcome] || o.outcome}</span>
+                <span className="mono text-zinc-300">{o.count}</span>
+              </div>
+              <div className="mt-1 h-1 rounded bg-ink-800">
+                <div className="h-1 rounded bg-accent/60" style={{ width: `${(o.count / totalOutcomes) * 100}%` }} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="panel p-4">
+        <h2 className="text-sm font-semibold">Recent leads</h2>
+        <ul className="mt-2 divide-y divide-ink-800">
+          {(data.recentLeads || []).map((l: any) => (
+            <li key={l.id} className="py-2">
+              <p className="truncate text-xs text-zinc-300">{l.business_name || 'Unnamed'}</p>
+              <p className="text-2xs text-muted">
+                <span className="mono">{l.phone}</span>
+                {l.city ? ` · ${l.city}` : ''}
+              </p>
+            </li>
+          ))}
+          {(data.recentLeads || []).length === 0 && <li className="py-2 text-xs text-muted">Nothing yet.</li>}
+        </ul>
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
+function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [callerIds, setCallerIds] = useState<string[]>([]);
 
-function Calls() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [userId, setUserId] = useState('');
+  useEffect(() => {
+    j('/api/caller-ids')
+      .then((d: any) => {
+        const rows = Array.isArray(d) ? d : d.rows || [];
+        setCallerIds(rows.filter((r: any) => r.active !== false).map((r: any) => r.number));
+      })
+      .catch(() => setCallerIds([]));
+  }, []);
+
+  const save = async (body: any, note = 'Saved') => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      await patch(`/api/admin/users/${user.id}`, body);
+      setMsg(note);
+      onSaved();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="panel p-4">
+        <h2 className="text-sm font-semibold">Permissions</h2>
+        <p className="mt-0.5 text-2xs text-muted">Everything else in the dialer is read-only for this person.</p>
+        <div className="mt-2 divide-y divide-ink-800">
+          <Toggle
+            checked={Boolean(user.canUploadLeads)}
+            onChange={(v) => save({ canUploadLeads: v }, v ? 'Uploads allowed' : 'Uploads revoked')}
+            label="Upload leads"
+            hint="Import CSV on their leads page."
+            disabled={saving}
+          />
+          <Toggle
+            checked={Boolean(user.canHearRecordings)}
+            onChange={(v) => save({ canHearRecordings: v }, v ? 'Recordings allowed' : 'Recordings revoked')}
+            label="Listen to recordings"
+            hint="Playback only — there is no download button."
+            disabled={saving}
+          />
+          <Toggle
+            checked={Boolean(user.isActive)}
+            onChange={(v) => save({ isActive: v }, v ? 'Account enabled' : 'Account disabled')}
+            label="Account active"
+            hint="Disabled users are signed out and cannot log in."
+            disabled={saving}
+          />
+        </div>
+      </div>
+
+      <div className="panel p-4">
+        <h2 className="text-sm font-semibold">Dialing</h2>
+        <p className="mt-0.5 text-2xs text-muted">Optional per-person overrides. Blank means the team default.</p>
+
+        <div className="mt-3 space-y-3">
+          <div>
+            <label className="label">Caller ID</label>
+            <select
+              className="field"
+              value={user.callerId || ''}
+              onChange={(e) => save({ callerId: e.target.value }, 'Caller ID updated')}
+              disabled={saving}
+            >
+              <option value="">Team default (rotate)</option>
+              {callerIds.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="label">Parallel lines</label>
+            <select
+              className="field"
+              value={String(user.parallelLines || 1)}
+              onChange={(e) => save({ parallelLines: Number(e.target.value) }, 'Line count updated')}
+              disabled={saving}
+            >
+              <option value="1">1 — one at a time</option>
+              <option value="2">2 — two at a time</option>
+              <option value="3">3 — three at a time</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="label">Reset password</label>
+            <div className="flex gap-2">
+              <input
+                className="field flex-1"
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="new password, min 8 characters"
+              />
+              <button
+                className="btn-ghost !py-1.5 text-xs"
+                disabled={password.length < 8 || saving}
+                onClick={async () => {
+                  await save({ password }, 'Password reset — they must sign in again');
+                  setPassword('');
+                }}
+              >
+                Set
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {msg && <p className="mt-3 text-2xs text-accent">{msg}</p>}
+      </div>
+
+      <div className="panel border-red-950/60 p-4 lg:col-span-2">
+        <h2 className="text-sm font-semibold text-red-300">Danger zone</h2>
+        <p className="mt-1 text-2xs text-muted">
+          Deleting removes the login. Their leads become unassigned; call history is kept but detached.
+        </p>
+        <button
+          className="btn-ghost mt-3 !border-red-900/60 !py-1.5 text-xs !text-red-300"
+          onClick={async () => {
+            if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return;
+            await del(`/api/admin/users/${user.id}`);
+            window.location.reload();
+          }}
+        >
+          Delete this user
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function UserCalls({ userId }: { userId: string }) {
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<any>(null);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    adminApi<{ rows: UserRow[] }>('/users').then((r) => setUsers(r.rows)).catch(() => {});
+    j(`/api/admin/calls?userId=${userId}&page=${page}&limit=25&search=${encodeURIComponent(search)}`)
+      .then(setData)
+      .catch(() => setData({ rows: [], total: 0, pages: 1 }));
+  }, [userId, page, search]);
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-ink-800 px-4 py-3">
+        <h2 className="text-sm font-semibold">Call history</h2>
+        <input
+          className="field !w-56 !py-1.5 text-xs"
+          placeholder="Search number or business"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
+        />
+      </div>
+      <CallTable data={data} />
+      {data && data.pages > 1 && (
+        <div className="flex items-center justify-between border-t border-ink-800 px-4 py-3 text-2xs text-muted">
+          <span>
+            Page {data.page} of {data.pages} · {data.total} calls
+          </span>
+          <div className="flex gap-2">
+            <button className="btn-ghost !py-1 text-2xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+              Previous
+            </button>
+            <button className="btn-ghost !py-1 text-2xs" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CallTable({ data }: { data: any }) {
+  if (!data) return <div className="p-6 text-xs text-muted">Loading…</div>;
+  if (!data.rows?.length) return <div className="p-10 text-center text-xs text-muted">No calls recorded.</div>;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead className="bg-ink-900">
+          <tr>
+            <th className="th">When</th>
+            <th className="th">Business</th>
+            <th className="th">Number</th>
+            <th className="th">Result</th>
+            <th className="th text-right">Duration</th>
+            <th className="th">Person</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((c: any) => (
+            <tr key={c.id}>
+              <td className="td whitespace-nowrap text-2xs text-zinc-500">{fmtDateTime(c.called_at)}</td>
+              <td className="td max-w-[220px] truncate">{c.business_name || <span className="text-zinc-600">—</span>}</td>
+              <td className="td mono text-zinc-400">{c.to_number}</td>
+              <td className="td">
+                {c.outcome ? (
+                  <Pill tone="muted">{OUTCOME_LABEL[c.outcome] || c.outcome}</Pill>
+                ) : (
+                  <span className="text-2xs text-zinc-600">{c.status}</span>
+                )}
+              </td>
+              <td className="td text-right mono text-zinc-400">{c.duration_sec ? fmtTalk(c.duration_sec) : '—'}</td>
+              <td className="td text-2xs text-zinc-500">{c.user_email || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Calls() {
+  const [users, setUsers] = useState<any[]>([]);
+  const [userId, setUserId] = useState('');
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    j('/api/admin/users').then((d) => setUsers(d.rows)).catch(() => setUsers([]));
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      adminApi<{ rows: any[] }>(`/calls?limit=100&userId=${encodeURIComponent(userId)}&search=${encodeURIComponent(search)}`)
-        .then((r) => setRows(r.rows))
-        .catch(() => setRows([]));
-    }, 250);
-    return () => clearTimeout(t);
-  }, [userId, search]);
+    j(`/api/admin/calls?page=${page}&limit=25${userId ? `&userId=${userId}` : ''}`)
+      .then(setData)
+      .catch(() => setData({ rows: [], total: 0, pages: 1 }));
+  }, [page, userId]);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <select className="field !w-56" value={userId} onChange={(e) => setUserId(e.target.value)}>
-          <option value="">All users</option>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Calls</h1>
+          <p className="mt-0.5 text-xs text-muted">Every call across the team.</p>
+        </div>
+        <select
+          className="field !w-auto !py-1.5 text-xs"
+          value={userId}
+          onChange={(e) => {
+            setUserId(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Everyone</option>
           {users.map((u) => (
             <option key={u.id} value={u.id}>
               {u.fullName || u.email}
             </option>
           ))}
         </select>
-        <input className="field !w-64" placeholder="Search business or number" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
       <div className="panel overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-ink-900 text-2xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="px-3 py-2 text-left">When</th>
-              <th className="px-3 py-2 text-left">User</th>
-              <th className="px-3 py-2 text-left">Business</th>
-              <th className="px-3 py-2 text-left">Number</th>
-              <th className="px-3 py-2 text-right">Duration</th>
-              <th className="px-3 py-2 text-left">Outcome</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((c) => (
-              <tr key={c.id} className="border-t border-ink-800">
-                <td className="px-3 py-1.5 text-2xs text-muted">{fmt(c.called_at)}</td>
-                <td className="px-3 py-1.5 text-2xs">{c.user_email || '—'}</td>
-                <td className="px-3 py-1.5">{c.business_name || '—'}</td>
-                <td className="px-3 py-1.5 mono text-muted">{c.to_number}</td>
-                <td className="px-3 py-1.5 text-right mono">{c.duration_sec}s</td>
-                <td className="px-3 py-1.5 text-2xs">{c.outcome || c.status}</td>
-              </tr>
-            ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-xs text-muted">
-                  No calls yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <CallTable data={data} />
+        {data && data.pages > 1 && (
+          <div className="flex items-center justify-between border-t border-ink-800 px-4 py-3 text-2xs text-muted">
+            <span>
+              Page {data.page} of {data.pages} · {data.total} calls
+            </span>
+            <div className="flex gap-2">
+              <button className="btn-ghost !py-1 text-2xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                Previous
+              </button>
+              <button className="btn-ghost !py-1 text-2xs" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * workspace settings
+ * ------------------------------------------------------------------ */
 
 function AdminSettings() {
-  const [form, setForm] = useState<any>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [s, setS] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/settings', { credentials: 'include' })
-      .then((r) => r.json())
-      .then(setForm)
-      .catch(() => setForm(null));
+    j('/api/settings').then(setS).catch(() => setS(null));
   }, []);
 
-  if (!form) return <p className="text-sm text-muted">Loading…</p>;
+  if (!s) return <Splash />;
+
+  const set = (path: string, v: any) => {
+    const parts = path.split('.');
+    setS((prev: any) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      let cur = next;
+      for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+      cur[parts[parts.length - 1]] = v;
+      return next;
+    });
+  };
 
   const save = async () => {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch('/api/settings', {
+      await fetch('/api/settings', {
         method: 'PUT',
-        credentials: 'include',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(s),
+      }).then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || 'Save failed');
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Could not save');
-      setForm({ ...data, twilio: { ...data.twilio, authToken: '' } });
-      setMsg('Saved.');
+      const fresh = await j('/api/settings');
+      setS(fresh);
+      setMsg('Saved');
     } catch (e: any) {
-      setMsg(e?.message || 'Could not save');
+      setMsg(e?.message || 'Save failed');
     } finally {
       setBusy(false);
     }
   };
 
-  const t = (k: string, v: any) => setForm({ ...form, twilio: { ...form.twilio, [k]: v } });
-
   return (
-    <div className="max-w-3xl space-y-4">
-      <div className="panel p-4">
-        <h3 className="text-sm font-semibold">Twilio</h3>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Account SID</Label>
-            <input className="field mono" value={form.twilio.accountSid || ''} onChange={(e) => t('accountSid', e.target.value)} />
-          </div>
-          <div>
-            <Label>Auth token (blank keeps the saved one)</Label>
-            <input className="field mono" value={form.twilio.authToken || ''} onChange={(e) => t('authToken', e.target.value)} />
-          </div>
-          <div>
-            <Label>Default caller ID</Label>
-            <input className="field mono" value={form.twilio.number || ''} onChange={(e) => t('number', e.target.value)} />
-          </div>
+    <div className="space-y-5">
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
+          <p className="mt-0.5 text-xs text-muted">Shared by everyone. Staff cannot change these.</p>
         </div>
-      </div>
-
-      <div className="panel p-4">
-        <h3 className="text-sm font-semibold">Calling defaults</h3>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Ring timeout (seconds)</Label>
-            <input
-              className="field mono"
-              type="number"
-              min={10}
-              max={90}
-              value={form.ringTimeoutSec || 60}
-              onChange={(e) => setForm({ ...form, ringTimeoutSec: Number(e.target.value) })}
-            />
-          </div>
-          <div>
-            <Label>Parallel lines (default)</Label>
-            <select
-              className="field"
-              value={form.parallelLines || 1}
-              onChange={(e) => setForm({ ...form, parallelLines: Number(e.target.value) })}
-            >
-              <option value={1}>1</option>
-              <option value={2}>2</option>
-              <option value={3}>3</option>
-            </select>
-          </div>
-          <div>
-            <Label>Keep Twilio recording copy (days)</Label>
-            <input
-              className="field mono"
-              type="number"
-              min={0}
-              max={365}
-              value={form.recordingRetentionDays ?? 7}
-              onChange={(e) => setForm({ ...form, recordingRetentionDays: Number(e.target.value) })}
-            />
-          </div>
-        </div>
-
-        <div className="mt-3 space-y-2">
-          {[
-            ['recordingEnabled', 'Record calls'],
-            ['amdEnabled', 'Detect answering machines'],
-            ['localPresenceEnabled', 'Local presence (match area code)'],
-          ].map(([key, label]) => (
-            <label key={key} className="flex items-center justify-between gap-4 text-xs">
-              <span>{label}</span>
-              <input
-                type="checkbox"
-                className="accent-check"
-                checked={Boolean(form[key])}
-                onChange={(e) => setForm({ ...form, [key]: e.target.checked })}
-              />
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
         <button className="btn-primary !py-2 text-xs" onClick={save} disabled={busy}>
           {busy ? 'Saving…' : 'Save settings'}
         </button>
-        {msg && <span className="text-2xs text-accent">{msg}</span>}
+      </div>
+
+      {msg && <p className="text-xs text-accent">{msg}</p>}
+      {s.warnings?.map((w: string) => (
+        <p key={w} className="rounded border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+          {w}
+        </p>
+      ))}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="panel p-4">
+          <h2 className="text-sm font-semibold">Twilio</h2>
+          <div className="mt-3 space-y-3">
+            <div>
+              <label className="label">Account SID</label>
+              <input className="field mono" value={s.twilio.accountSid} onChange={(e) => set('twilio.accountSid', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Auth token</label>
+              <input
+                className="field mono"
+                type="password"
+                value={s.twilio.authToken}
+                onFocus={(e) => {
+                  if (e.target.value.includes('•')) set('twilio.authToken', '');
+                }}
+                onChange={(e) => set('twilio.authToken', e.target.value)}
+                placeholder="leave blank to keep the saved token"
+              />
+            </div>
+            <div>
+              <label className="label">Voice number</label>
+              <input className="field mono" value={s.twilio.number} onChange={(e) => set('twilio.number', e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        <div className="panel p-4">
+          <h2 className="text-sm font-semibold">Dialing defaults</h2>
+          <div className="mt-2 divide-y divide-ink-800">
+            <Toggle checked={s.recordingEnabled} onChange={(v) => set('recordingEnabled', v)} label="Record calls" />
+            <Toggle
+              checked={s.amdEnabled}
+              onChange={(v) => set('amdEnabled', v)}
+              label="Voicemail detection"
+              hint="Adds about $0.0075 per call."
+            />
+            <Toggle
+              checked={s.localPresenceEnabled}
+              onChange={(v) => set('localPresenceEnabled', v)}
+              label="Local presence"
+              hint="Prefer a caller ID in the lead's area code."
+            />
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Recording retention (days)</label>
+              <input
+                className="field mono"
+                type="number"
+                min={1}
+                value={s.recordingRetentionDays}
+                onChange={(e) => set('recordingRetentionDays', Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="label">Ring timeout (seconds)</label>
+              <input
+                className="field mono"
+                type="number"
+                min={10}
+                max={90}
+                value={s.ringTimeoutSec}
+                onChange={(e) => set('ringTimeoutSec', Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="label">Parallel lines (team default)</label>
+              <select className="field" value={String(s.parallelLines)} onChange={(e) => set('parallelLines', Number(e.target.value))}>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
 
       <CallerIdsPanel />

@@ -29,7 +29,17 @@ const SYNONYMS: Record<string, string[]> = {
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-export function ImportDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+export function ImportDialog({
+  open,
+  asUserId,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  asUserId?: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<any[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -102,7 +112,9 @@ export function ImportDialog({ open, onClose, onDone }: { open: boolean; onClose
       let invalid = 0;
       const CHUNK = 500;
       for (let i = 0; i < records.length; i += CHUNK) {
-        const res = await api.post<any>('/api/leads/import', { records: records.slice(i, i + CHUNK) });
+        const res = await api.post<any>(`/api/leads/import${asUserId ? `?userId=${asUserId}` : ''}`, {
+          records: records.slice(i, i + CHUNK),
+        });
         created += res.created;
         duplicates += res.duplicates;
         invalid += res.invalid;

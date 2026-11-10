@@ -38,10 +38,13 @@ interface Filters {
 const EMPTY: Filters = { search: '', status: 'all', outcome: 'all', city: '', state: '', neverCalled: false };
 const PRESET_KEY = 'dd.presets';
 
-export function Leads() {
+export function Leads({ asUserId }: { asUserId?: string } = {}) {
   const qc = useQueryClient();
-  const dialer = useDialer();
   const { me } = useAuth();
+  const adminMode = Boolean(asUserId);
+  const suffix = asUserId ? `userId=${asUserId}` : '';
+  const withUser = (path: string) => (asUserId ? `${path}${path.includes('?') ? '&' : '?'}${suffix}` : path);
+  const [creating, setCreating] = useState(false);
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [searchInput, setSearchInput] = useState('');
   const [page, setPage] = useState(1);
@@ -64,24 +67,26 @@ export function Leads() {
   }, [searchInput]);
 
   const { data: facets } = useQuery<any>({
-    queryKey: ['lead-facets'],
-    queryFn: () => api.get('/api/leads/facets'),
+    queryKey: ['lead-facets', asUserId],
+    queryFn: () => api.get(withUser('/api/leads/facets')),
   });
 
   const query = useQuery<{ rows: Lead[]; total: number; pages: number; page: number }>({
-    queryKey: ['leads', filters, page],
+    queryKey: ['leads', filters, page, asUserId],
     queryFn: () =>
       api.get(
-        `/api/leads${qs({
-          search: filters.search,
-          status: filters.status,
-          outcome: filters.outcome,
-          city: filters.city,
-          state: filters.state,
-          neverCalled: filters.neverCalled ? 1 : '',
-          page,
-          limit: 50,
-        })}`,
+        withUser(
+          `/api/leads${qs({
+            search: filters.search,
+            status: filters.status,
+            outcome: filters.outcome,
+            city: filters.city,
+            state: filters.state,
+            neverCalled: filters.neverCalled ? 1 : '',
+            page,
+            limit: 50,
+          })}`,
+        ),
       ),
   });
 
@@ -94,15 +99,36 @@ export function Leads() {
   };
 
   const saveLead = async (patch: Partial<Lead>) => {
-    if (!editing) return;
-    await api.patch(`/api/leads/${editing.id}`, patch);
+    if (creating) {
+      await api.post(withUser('/api/leads'), patch);
+      setCreating(false);
+    } else {
+      if (!editing) return;
+      await api.patch(withUser(`/api/leads/${editing.id}`), patch);
+      setEditing(null);
+    }
+    qc.invalidateQueries({ queryKey: ['leads'] });
+    qc.invalidateQueries({ queryKey: ['lead-facets'] });
+  };
+
+  const deleteLead = async (id: string) => {
+    if (!confirm('Delete this lead permanently?')) return;
+    await api.del(withUser(`/api/leads/${id}`));
     setEditing(null);
     qc.invalidateQueries({ queryKey: ['leads'] });
+    qc.invalidateQueries({ queryKey: ['lead-facets'] });
   };
 
   return (
     <div>
-      <PageHeader title="Leads" sub={`${query.data?.total?.toLocaleString() ?? '—'} leads in this workspace`}>
+      <PageHeader
+        title={adminMode ? 'Leads' : 'Leads'}
+        sub={
+          adminMode
+            ? `${query.data?.total?.toLocaleString() ?? '—'} leads assigned to this user`
+            : `${query.data?.total?.toLocaleString() ?? '—'} leads in this workspace`
+        }
+      >
         <select
           className="field !w-auto !py-1.5 text-xs"
           value=""
@@ -125,9 +151,14 @@ export function Leads() {
         <button className="btn-ghost !py-1.5 text-xs" onClick={savePreset}>
           Save filter
         </button>
-        {(me?.user as any)?.canUploadLeads && (
+        {(adminMode || (me?.user as any)?.canUploadLeads) && (
           <button className="btn-primary !py-1.5 text-xs" onClick={() => setImportOpen(true)}>
             Import CSV
+          </button>
+        )}
+        {adminMode && (
+          <button className="btn-ghost !py-1.5 text-xs" onClick={() => setCreating(true)}>
+            Add lead
           </button>
         )}
       </PageHeader>
@@ -259,16 +290,7 @@ export function Leads() {
                     </td>
                     <td className="td text-zinc-500">{fmtWhen(l.last_called_at)}</td>
                     <td className="td text-right">
-                      <button
-                        className="btn-ghost !px-2 !py-1 text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          dialer.start({ to: l.phone, leadId: l.id, label: l.business_name });
-                        }}
-                        disabled={dialer.status === 'live' || dialer.status === 'connecting'}
-                      >
-                        Call
-                      </button>
+                      {!adminMode && <CallButton lead={l} />}
                     </td>
                   </tr>
                 ))}
@@ -291,6 +313,7 @@ export function Leads() {
 
       <ImportDialog
         open={importOpen}
+        asUserId={asUserId}
         onClose={() => setImportOpen(false)}
         onDone={() => {
           qc.invalidateQueries({ queryKey: ['leads'] });
@@ -299,8 +322,34 @@ export function Leads() {
         }}
       />
 
-      <LeadEditor lead={editing} onClose={() => setEditing(null)} onSave={saveLead} />
+      <LeadEditor
+        lead={creating ? ({ id: '', status: 'new' } as Lead) : editing}
+        isNew={creating}
+        admin={adminMode}
+        onClose={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
+        onSave={saveLead}
+        onDelete={deleteLead}
+      />
     </div>
+  );
+}
+
+function CallButton({ lead }: { lead: Lead }) {
+  const dialer = useDialer();
+  return (
+    <button
+      className="btn-ghost !px-2 !py-1 text-xs"
+      onClick={(e) => {
+        e.stopPropagation();
+        dialer.start({ to: lead.phone, leadId: lead.id, label: lead.business_name });
+      }}
+      disabled={dialer.status === 'live' || dialer.status === 'connecting'}
+    >
+      Call
+    </button>
   );
 }
 
@@ -313,12 +362,18 @@ function toLocalInput(iso?: string | null) {
 
 function LeadEditor({
   lead,
+  isNew,
+  admin,
   onClose,
   onSave,
+  onDelete,
 }: {
   lead: Lead | null;
+  isNew?: boolean;
+  admin?: boolean;
   onClose: () => void;
   onSave: (p: Partial<Lead>) => Promise<void>;
+  onDelete?: (id: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<any>({});
   useEffect(() => {
@@ -330,7 +385,7 @@ function LeadEditor({
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
   return (
-    <Modal open={!!lead} onClose={onClose} title="Lead" width="max-w-2xl">
+    <Modal open={!!lead} onClose={onClose} title={isNew ? 'New lead' : 'Lead'} width="max-w-2xl">
       <div className="grid grid-cols-2 gap-3">
         {[
           ['business_name', 'Business name'],
@@ -395,13 +450,25 @@ function LeadEditor({
         </div>
       </div>
 
-      <div className="mt-4 flex justify-end gap-2">
-        <button className="btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-        <button className="btn-primary" onClick={() => onSave(form)}>
-          Save
-        </button>
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <div>
+          {admin && !isNew && onDelete && (
+            <button
+              className="btn-ghost !py-1.5 text-xs !text-red-400 hover:!bg-red-950/40"
+              onClick={() => onDelete(lead.id)}
+            >
+              Delete lead
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => onSave(form)}>
+            {isNew ? 'Create lead' : 'Save'}
+          </button>
+        </div>
       </div>
     </Modal>
   );

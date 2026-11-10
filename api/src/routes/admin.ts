@@ -58,11 +58,15 @@ const userColumns = `u.id, u.email, u.full_name as "fullName", u.is_active as "i
 
 const userStats = `(select count(*) from leads l where l.assigned_user_id = u.id)::int as "leadsAssigned",
   (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('day', now()))::int as "callsToday",
-  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('week', now()))::int as "callsWeek",
-  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('month', now()))::int as "callsMonth",
-  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('month', now())
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '7 days')::int as "callsWeek",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '30 days')::int as "callsMonth",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '30 days'
+     and c.duration_sec > 0)::int as "answeredMonth",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '30 days'
      and c.outcome in ('connected_dm','connected_gk','connected_other','appointment_set'))::int as "connectsMonth",
-  (select max(called_at) from call_logs c where c.user_id = u.id) as "lastCallAt"`;
+  (select coalesce(sum(c.duration_sec),0) from call_logs c where c.user_id = u.id
+     and c.called_at >= now() - interval '30 days')::int as "talkSecMonth",
+  (select max(c.called_at) from call_logs c where c.user_id = u.id) as "lastCallAt"`;
 
 adminRouter.get(
   '/overview',
@@ -136,15 +140,53 @@ adminRouter.post(
 adminRouter.get(
   '/users/:id',
   wrap(async (req, res) => {
-    const row = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [req.params.id]);
+    const id = req.params.id;
+    const row = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [id]);
     if (!row) return res.status(404).json({ error: 'User not found' });
+
+    // 14-day activity, zero-filled so the chart never has gaps.
+    const daily = await q(
+      `select to_char(d.day, 'YYYY-MM-DD') as day,
+              count(c.id)::int as calls,
+              count(c.id) filter (where c.duration_sec > 0)::int as answered
+         from generate_series(current_date - interval '13 days', current_date, interval '1 day') d(day)
+         left join call_logs c
+                on c.user_id = $1
+               and c.called_at >= d.day
+               and c.called_at < d.day + interval '1 day'
+        group by d.day
+        order by d.day`,
+      [id],
+    );
+
+    const outcomes = await q(
+      `select coalesce(outcome,'none') as outcome, count(*)::int as count
+         from call_logs
+        where user_id=$1 and called_at >= now() - interval '30 days'
+        group by 1 order by 2 desc`,
+      [id],
+    );
+
+    const statuses = await q(
+      `select status, count(*)::int as count from leads where assigned_user_id=$1 group by 1`,
+      [id],
+    );
 
     const recentLeads = await q(
       `select id, business_name, phone, city, state, status, outcome, last_called_at
-         from leads where assigned_user_id=$1 order by created_at desc limit 10`,
-      [req.params.id],
+         from leads where assigned_user_id=$1 order by created_at desc limit 8`,
+      [id],
     );
-    res.json({ user: row, recentLeads });
+
+    const recentCalls = await q(
+      `select c.id, c.to_number, c.status, c.outcome, c.duration_sec, c.called_at,
+              l.business_name
+         from call_logs c left join leads l on l.id = c.lead_id
+        where c.user_id=$1 order by c.called_at desc limit 10`,
+      [id],
+    );
+
+    res.json({ user: row, daily, outcomes, statuses, recentLeads, recentCalls });
   }),
 );
 
