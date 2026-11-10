@@ -11,6 +11,7 @@ export interface StartedCall {
   label?: string;
   leadId?: string | null;
   sessionId?: string | null;
+  inbound?: boolean;
 }
 
 interface DialerValue {
@@ -573,7 +574,27 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   }, [muted]);
 
   const sendDigit = useCallback((d: string) => {
-    callRef.current?.sendDigits(d);
+    const a = activeRef.current;
+    const native = () => {
+      try {
+        callRef.current?.sendDigits(d);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    // Outbound calls live in a conference, which swallows DTMF. Ask the server to
+    // play the tone on the lead's own leg so the IVR actually hears it.
+    if (a?.callLogId && !a.inbound) {
+      api
+        .post<any>('/api/voice/dtmf', { callLogId: a.callLogId, digits: d })
+        .then((r) => {
+          if (r?.native) native();
+        })
+        .catch(native);
+      return;
+    }
+    native();
   }, []);
 
   const setEndedHandler = useCallback((fn: any) => {
@@ -594,7 +615,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
     incomingRef.current = null;
     setIncoming(null);
 
-    const info: StartedCall = { callLogId, to: c.parameters?.From || 'inbound', label: 'Inbound call' };
+    const info: StartedCall = { callLogId, to: c.parameters?.From || 'inbound', label: 'Inbound call', inbound: true };
     activeRef.current = info;
     setActive(info);
     liveRef.current = true;

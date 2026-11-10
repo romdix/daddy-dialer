@@ -463,6 +463,10 @@ voiceRouter.post(
 
     const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
     if (!call) return;
+
+    // A keypad digit briefly pulls the lead out of the room to play the tone.
+    // That looks like a hang-up, so ignore the leave event just after a digit.
+    const recentDtmf = call.dtmf_at && Date.now() - new Date(call.dtmf_at).getTime() < 15000;
     console.log('[voice] conf', callLogId.slice(0, 8), ev, participant.slice(0, 8));
 
     if (ev === 'start' && confSid) {
@@ -524,6 +528,10 @@ voiceRouter.post(
     }
 
     if (ev === 'leave' && isLead) {
+      if (recentDtmf) {
+        console.log('[voice] leave ignored (keypad)', callLogId.slice(0, 8));
+        return;
+      }
       await q(
         `update call_logs set status='completed', ended_at=now(),
                 duration_sec = greatest(duration_sec, coalesce(extract(epoch from (now()-connected_at))::int, 0))
@@ -771,10 +779,12 @@ voiceRouter.post(
               p.endCall!(s, agentSid).catch(() => {});
             }, 2500);
           }
-        } else if (p.endCall && leadSid.startsWith('CA')) {
-          // IVR or unknown machine: hang up quietly, leave the disposition to the rep.
+        } else if (isBeep && p.endCall && leadSid.startsWith('CA')) {
+          // A voicemail with no drop configured: still skip it.
           await p.endCall(s, leadSid);
         }
+        // Anything else (IVR / phone menu / silence) stays connected on purpose:
+        // the rep can press 1 and reach a human.
       } catch (e: any) {
         console.error('[voice] amd handling failed', e?.message);
       }
@@ -1020,6 +1030,65 @@ voiceRouter.post(
     }
     await q(`update call_batches set ended_at=now() where id=$1`, [batch.id]);
     res.json({ ok: true });
+  }),
+);
+
+/* ------------------------------------------------------------------------- *
+ * Keypad tones
+ *
+ * A Twilio conference does not forward one participant's DTMF to another, so
+ * pressing "1" for sales would do nothing. Instead we play the tones on the
+ * lead's own leg (which the IVR does hear) and walk them back into the room.
+ * ------------------------------------------------------------------------- */
+
+voiceRouter.post(
+  '/dtmf',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const callLogId = String(req.body?.callLogId || '');
+    const digits = String(req.body?.digits || '').replace(/[^0-9*#ABCD]/gi, '').slice(0, 12);
+    if (!isUuid(callLogId) || !digits) return res.status(400).json({ error: 'Bad digits' });
+
+    const call = await one<any>(`select * from call_logs where id=$1 and workspace_id=$2`, [callLogId, ws]);
+    if (!call) return res.status(404).json({ error: 'Not found' });
+
+    // Inbound calls are a direct bridge, so the browser can send tones itself.
+    if (call.direction === 'inbound') return res.json({ native: true });
+
+    const leadSid = String(call.lead_call_sid || '');
+    if (!leadSid.startsWith('CA')) return res.status(409).json({ error: 'The call is not connected yet' });
+
+    const s = await loadSettings(ws);
+    const p = getProvider(call.provider);
+    if (!p.redirectCall) return res.json({ native: true });
+
+    await q(`update call_logs set dtmf_at=now() where id=$1`, [callLogId]);
+    const qs = `callLogId=${encodeURIComponent(callLogId)}&workspaceId=${encodeURIComponent(ws)}&digits=${encodeURIComponent(digits)}`;
+    await p.redirectCall(s, leadSid, `${baseUrl(req)}/api/voice/dtmf-twiml?${qs}`);
+    console.log('[voice] dtmf', callLogId.slice(0, 8), digits);
+    res.json({ ok: true });
+  }),
+);
+
+/** Fetched by the lead's leg: play the tones, then rejoin the room. */
+voiceRouter.post(
+  '/dtmf-twiml',
+  wrap(async (req, res) => {
+    const callLogId = String(req.query.callLogId || '');
+    const digits = String(req.query.digits || '').replace(/[^0-9*#ABCD]/gi, '').slice(0, 12);
+    const xml = (s: string) => res.type('text/xml').send(s);
+    if (!isUuid(callLogId) || !digits) return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+
+    const call = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+    if (!call) return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+
+    const room = call.batch_id ? `batch-${call.batch_id}` : `call-${callLogId}`;
+    xml(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play digits="${digits}"/>
+  <Dial><Conference startConferenceOnEnter="true" endConferenceOnExit="false" beep="false">${xmlEscape(room)}</Conference></Dial>
+</Response>`);
   }),
 );
 
