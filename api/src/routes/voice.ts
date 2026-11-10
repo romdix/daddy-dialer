@@ -417,6 +417,17 @@ voiceRouter.post(
         });
         await q(`update call_logs set lead_call_sid=$2, provider_call_id=$2 where id=$1`, [callLogId, r.sid]);
         console.log('[voice] lead dialed', callLogId.slice(0, 8), r.sid);
+
+        // The rep may have hung up while this dial was still in flight.
+        const after = await one<any>(`select status, ended_at from call_logs where id=$1`, [callLogId]);
+        if (after && (after.ended_at || ['completed', 'canceled', 'failed'].includes(String(after.status)))) {
+          try {
+            await getProvider(call.provider).endCall?.(s, r.sid);
+            console.log('[voice] cancelled in-flight lead leg', r.sid.slice(0, 8));
+          } catch {
+            /* already gone */
+          }
+        }
       } catch (e: any) {
         console.error('[voice] dial failed', callLogId.slice(0, 8), e?.message);
         await q(`update call_logs set status='failed', error=$2, ended_at=now() where id=$1`, [
