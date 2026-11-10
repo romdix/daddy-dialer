@@ -243,7 +243,7 @@ leadsRouter.post(
         ws,
         req.ctx!.userId,
         clean(b.business_name),
-        formatPhone(phone),
+        formatPhone(norm),
         norm,
         clean(b.address),
         clean(b.city),
