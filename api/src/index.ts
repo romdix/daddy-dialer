@@ -1,7 +1,8 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
-import path from 'node:path';import { config } from './config';
+import path from 'node:path';
+import { config } from './config';
 import { migrate, pool, seedBrandFromEnv } from './db';
 import { attachUser } from './middleware';
 import { purgeTwilioRecordings } from './recordings';
