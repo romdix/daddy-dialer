@@ -390,7 +390,16 @@ function Overview({ onOpenUser }: { onOpenUser: (id: string) => void }) {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Team" value={data.users.length} hint={`${data.users.filter((u: any) => u.isActive).length} active`} />
-        <Stat label="Leads" value={(t.leads || 0).toLocaleString()} hint={`${t.unassigned || 0} unassigned`} />
+        <Stat
+          label="Leads"
+          value={(t.leads || 0).toLocaleString()}
+          hint={[
+            `${t.unassigned || 0} unassigned`,
+            t.with_deleted ? `${t.with_deleted} with deleted accounts` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        />
         <Stat label="Calls today" value={(t.calls_today || 0).toLocaleString()} />
         <Stat label="Calls this month" value={(t.calls_month || 0).toLocaleString()} />
       </div>

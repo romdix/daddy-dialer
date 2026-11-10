@@ -83,6 +83,9 @@ adminRouter.get(
       `select
          (select count(*) from leads where workspace_id=$1)::int as leads,
          (select count(*) from leads where workspace_id=$1 and assigned_user_id is null)::int as unassigned,
+         (select count(*) from leads l
+            join users u on u.id = l.assigned_user_id
+           where l.workspace_id=$1 and u.deleted_at is not null)::int as with_deleted,
          (select count(*) from call_logs where workspace_id=$1
             and called_at >= date_trunc('day', now() at time zone 'America/New_York') at time zone 'America/New_York')::int as calls_today,
          (select count(*) from call_logs where workspace_id=$1 and called_at >= date_trunc('month', now()))::int as calls_month
