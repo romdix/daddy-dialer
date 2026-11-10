@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { DialerProvider, useDialer } from '../lib/dialer';
@@ -61,6 +62,7 @@ export function Shell() {
         </aside>
 
         <main className="min-w-0 flex-1 overflow-y-auto">
+          <ActiveCallBar />
           <Outlet />
         </main>
 
@@ -68,6 +70,57 @@ export function Shell() {
         <IncomingBanner />
       </div>
     </DialerProvider>
+  );
+}
+
+/**
+ * Persistent call banner. It sits at the top of the content area on every page,
+ * so a call that is still live can never be missed after navigating away.
+ */
+function ActiveCallBar() {
+  const d = useDialer();
+  const active = d.status === 'connecting' || d.status === 'ringing' || d.status === 'live';
+
+  useEffect(() => {
+    if (!active) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [active]);
+
+  if (!active) return null;
+
+  const who = d.active?.label || d.active?.to || 'Call';
+  const mm = String(Math.floor(d.seconds / 60)).padStart(2, '0');
+  const ss = String(d.seconds % 60).padStart(2, '0');
+  const label = d.status === 'live' ? 'On call' : d.status === 'ringing' ? 'Ringing' : 'Connecting';
+
+  return (
+    <div className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-red-900/60 bg-red-950/70 px-6 py-2 backdrop-blur">
+      <span className="relative flex h-2.5 w-2.5 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+      </span>
+      <span className="text-2xs font-semibold uppercase tracking-wider text-red-200">{label}</span>
+      <span className="mono max-w-[260px] truncate text-xs text-zinc-100">{who}</span>
+      <span className="mono text-xs text-red-200/80">
+        {mm}:{ss}
+      </span>
+      {d.batch && d.batch.calls.length > 1 && (
+        <span className="text-2xs text-amber-300">{d.batch.calls.length} lines</span>
+      )}
+      <div className="ml-auto flex items-center gap-2">
+        <button className="btn-ghost !py-1 text-2xs" onClick={d.toggleMute}>
+          {d.muted ? 'Unmute' : 'Mute'}
+        </button>
+        <button className="btn-danger !py-1 text-xs" onClick={d.hangup}>
+          End call
+        </button>
+      </div>
+    </div>
   );
 }
 

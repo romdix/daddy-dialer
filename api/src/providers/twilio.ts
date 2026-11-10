@@ -166,9 +166,10 @@ export const twilioProvider: DialerProvider = {
       ...(o.detectVoicemail === false
         ? {}
         : {
-            // For a drop we must wait for the greeting to finish, otherwise the
-            // message plays over the top of it and gets cut off.
-            machineDetection: (o.voicemailDrop ? 'DetectMessageEnd' : 'Enable') as 'DetectMessageEnd' | 'Enable',
+            // DetectMessageEnd is required to ever see machine_end_beep — the
+            // cheaper 'Enable' mode only reports machine_start, so a voicemail
+            // would never be recognised and the call would stay connected.
+            machineDetection: 'DetectMessageEnd' as const,
             asyncAmd: 'true',
             asyncAmdStatusCallback: `${o.publicUrl}/api/voice/amd?${qs}`,
             asyncAmdStatusCallbackMethod: 'POST',

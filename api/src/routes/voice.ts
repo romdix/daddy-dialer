@@ -799,18 +799,23 @@ voiceRouter.post(
 
     if (/^machine_|^fax/i.test(answeredBy)) {
       // Twilio cannot distinguish a voicemail box from an IVR — both are "machine".
-      // The one signal that reliably means a recording is about to start is the
-      // beep. So: beep -> voicemail (and the drop may play), anything else machine
-      // -> IVR, and we never speak into an auto-attendant.
+      // The one signal that means a recording is about to start is the beep.
+      //
+      // machine_start only says "this is a machine"; Twilio is still listening
+      // to the greeting. Finalising that as IVR would leave the call connected
+      // for as long as the rep waited, so it is treated as "not decided yet"
+      // and the machine_end_* callback that follows does the deciding.
+      if (answeredBy === 'machine_start') {
+        await q(`update call_logs set answered_by=$2 where id=$1`, [callLogId, answeredBy]);
+        console.log('[voice] amd machine, waiting for greeting end', callLogId.slice(0, 8));
+        return;
+      }
+
       const isBeep = answeredBy === 'machine_end_beep';
       const isFax = answeredBy === 'fax';
       const outcome = isFax ? 'bad_number' : isBeep ? 'voicemail' : 'ivr';
 
-      await q(`update call_logs set answered_by=$2, outcome=coalesce(outcome,$3) where id=$1`, [
-        callLogId,
-        answeredBy,
-        outcome,
-      ]);
+      await q(`update call_logs set answered_by=$2, outcome=$3 where id=$1`, [callLogId, answeredBy, outcome]);
       if (call.lead_id) {
         await q(`update leads set outcome=$2, status=$3, updated_at=now() where id=$1`, [
           call.lead_id,
