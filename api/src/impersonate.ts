@@ -8,7 +8,10 @@ import { isAdminRequest } from './adminauth';
  * so the list, import, edit and delete code paths stay exactly the same.
  */
 export async function adminAsUser(req: Request, res: Response, next: NextFunction) {
-  if ((req as any).ctx || !isAdminRequest(req)) return next();
+  // A signed-in rep on the same domain would otherwise win, because their
+  // session cookie is sent to /api/leads too. The admin's request for a
+  // specific user takes precedence.
+  if (!isAdminRequest(req)) return next();
 
   const targetId = String((req.query as any)?.userId || '');
   if (!targetId) return next();

@@ -301,7 +301,11 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
           {(query.data?.rows || []).length === 0 && !query.isLoading && (
             <EmptyState
               title="No leads match this view"
-              hint="Import a CSV to get started, or clear the filters above."
+              hint={
+                adminMode
+                  ? 'Nothing is assigned to this person yet. Import a CSV here, or hand them leads from Admin → Leads.'
+                  : 'Import a CSV to get started, or clear the filters above.'
+              }
             />
           )}
 
