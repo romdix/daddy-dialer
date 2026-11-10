@@ -56,7 +56,8 @@ adminRouter.use(requireAdmin);
 
 const userColumns = `u.id, u.email, u.full_name as "fullName", u.is_active as "isActive",
   u.can_upload_leads as "canUploadLeads", u.can_hear_recordings as "canHearRecordings",
-  u.caller_id as "callerId", u.parallel_lines as "parallelLines", u.created_at as "createdAt"`;
+  u.caller_id as "callerId", u.parallel_lines as "parallelLines", u.created_at as "createdAt",
+  u.deleted_at as "deletedAt"`;
 
 const userStats = `(select count(*) from leads l where l.assigned_user_id = u.id)::int as "leadsAssigned",
   (select count(*) from call_logs c where c.user_id = u.id
@@ -76,7 +77,7 @@ adminRouter.get(
   wrap(async (_req, res) => {
     const ws = await primaryWorkspaceId();
     const users = await q(
-      `select ${userColumns}, ${userStats} from users u order by u.created_at asc`,
+      `select ${userColumns}, ${userStats} from users u where u.deleted_at is null order by u.created_at asc`,
     );
     const totals = await one<any>(
       `select
@@ -94,8 +95,13 @@ adminRouter.get(
 
 adminRouter.get(
   '/users',
-  wrap(async (_req, res) => {
-    const rows = await q(`select ${userColumns}, ${userStats} from users u order by u.created_at asc`);
+  wrap(async (req, res) => {
+    const withDeleted = req.query.includeDeleted === '1';
+    const rows = await q(
+      `select ${userColumns}, ${userStats} from users u
+        ${withDeleted ? '' : 'where u.deleted_at is null'}
+        order by u.deleted_at nulls first, u.created_at asc`,
+    );
     res.json({ rows });
   }),
 );
@@ -110,8 +116,14 @@ adminRouter.post(
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-    const exists = await one(`select id from users where lower(email)=lower($1)`, [email]);
-    if (exists) return res.status(409).json({ error: 'A user with that email already exists' });
+    const exists = await one<any>(`select id, deleted_at from users where lower(email)=lower($1)`, [email]);
+    if (exists) {
+      return res.status(409).json({
+        error: exists.deleted_at
+          ? 'That email belongs to a deleted user. Open the deleted list and restore it instead.'
+          : 'A user with that email already exists',
+      });
+    }
 
     const ws = await primaryWorkspaceId();
     const hash = await bcrypt.hash(password, 10);
@@ -246,25 +258,37 @@ adminRouter.delete(
   '/users/:id',
   wrap(async (req, res) => {
     const id = req.params.id;
+    const user = await one<any>(`select id, deleted_at from users where id=$1`, [id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.deleted_at) return res.json({ ok: true, alreadyDeleted: true });
 
-    // Hand their leads to the longest-standing teammate so nothing is orphaned.
+    // Their leads follow the longest-standing remaining teammate so the work
+    // keeps moving. If this was the last account the leads stay on the deleted
+    // user — still reachable from the deleted list.
     const fallback = await one<{ id: string }>(
-      `select id from users where id <> $1 order by created_at asc limit 1`,
+      `select id from users where id <> $1 and deleted_at is null order by created_at asc limit 1`,
       [id],
     );
-    const leads = await one<{ n: number }>(`select count(*)::int as n from leads where assigned_user_id=$1`, [id]);
-    if (leads && leads.n > 0 && !fallback) {
-      return res.status(409).json({
-        error: 'This is the last user and still owns leads. Reassign or delete those leads first.',
-      });
-    }
     if (fallback) {
       await q(`update leads set assigned_user_id=$2, updated_at=now() where assigned_user_id=$1`, [id, fallback.id]);
     }
 
-    const r = await q(`delete from users where id=$1 returning id`, [id]);
-    if (!r.length) return res.status(404).json({ error: 'User not found' });
+    await q(`update users set deleted_at=now(), is_active=false, updated_at=now() where id=$1`, [id]);
+    await q(`delete from auth_sessions where user_id=$1`, [id]);
+
     res.json({ ok: true, leadsMovedTo: fallback?.id || null });
+  }),
+);
+
+adminRouter.post(
+  '/users/:id/restore',
+  wrap(async (req, res) => {
+    const row = await one(
+      `update users set deleted_at=null, is_active=true, updated_at=now() where id=$1 returning id`,
+      [req.params.id],
+    );
+    if (!row) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true });
   }),
 );
 
@@ -539,7 +563,7 @@ adminRouter.get(
     const where = parts.length ? `and ${parts.join(' and ')}` : '';
 
     const rows = await q(
-      `select c.*, l.business_name, u.email as user_email, count(*) over() as total
+      `select c.*, l.business_name, u.email as user_email, u.deleted_at as user_deleted, count(*) over() as total
          from call_logs c
          left join leads l on l.id = c.lead_id
          left join users u on u.id = c.user_id

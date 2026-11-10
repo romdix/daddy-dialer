@@ -6,6 +6,10 @@ alter table users add column if not exists caller_id text;
 alter table users add column if not exists parallel_lines int not null default 1;
 alter table users add column if not exists updated_at timestamptz not null default now();
 
+-- Accounts are soft-deleted: call history and leads keep pointing at them, and
+-- the admin can still open the account to move its leads or restore it.
+alter table users add column if not exists deleted_at timestamptz;
+
 -- A lead belongs to one rep. Unassigned leads are visible only to the admin.
 alter table leads add column if not exists assigned_user_id uuid references users(id) on delete set null;
 create index if not exists leads_assigned on leads (assigned_user_id);

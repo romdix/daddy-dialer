@@ -376,9 +376,17 @@ function LeadEditor({
   onDelete?: (id: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<any>({});
+  const [agents, setAgents] = useState<any[]>([]);
   useEffect(() => {
     if (lead) setForm({ ...lead });
   }, [lead]);
+  useEffect(() => {
+    if (!admin) return;
+    fetch('/api/admin/users?includeDeleted=1', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : { rows: [] }))
+      .then((d) => setAgents(d.rows || []))
+      .catch(() => setAgents([]));
+  }, [admin]);
 
   if (!lead) return null;
 
@@ -424,6 +432,24 @@ function LeadEditor({
             ))}
           </select>
         </div>
+
+        {admin && (
+          <div className="col-span-2">
+            <label className="label">Assigned to</label>
+            <select
+              className="field"
+              value={form.assigned_user_id || ''}
+              onChange={(e) => set('assigned_user_id', e.target.value || null)}
+            >
+              <option value="">— unassigned —</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {(a.fullName ? `${a.fullName} — ${a.email}` : a.email) + (a.deletedAt ? ' (deleted)' : '')}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="col-span-2">
           <label className="label">Callback at</label>

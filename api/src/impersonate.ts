@@ -36,5 +36,7 @@ export async function adminAsUser(req: Request, res: Response, next: NextFunctio
     canUploadLeads: true,
     canHearRecordings: true,
   };
+  // Lets the lead editor move a lead to another owner.
+  (req as any).isAdminAsUser = true;
   next();
 }

@@ -311,6 +311,11 @@ leadsRouter.patch(
       params.push(v);
     }
 
+    if ((req as any).isAdminAsUser && 'assigned_user_id' in b) {
+      sets.push(`assigned_user_id=$${i++}`);
+      params.push(b.assigned_user_id || null);
+    }
+
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     sets.push('updated_at=now()');
 

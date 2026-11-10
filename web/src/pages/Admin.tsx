@@ -446,7 +446,13 @@ function UserTable({ rows, onOpenUser }: { rows: any[]; onOpenUser: (id: string)
                     </div>
                   </td>
                   <td className="td">
-                    {u.isActive ? <Pill tone="ok">active</Pill> : <Pill tone="off">disabled</Pill>}
+                    {u.deletedAt ? (
+                      <Pill tone="muted">deleted</Pill>
+                    ) : u.isActive ? (
+                      <Pill tone="ok">active</Pill>
+                    ) : (
+                      <Pill tone="off">disabled</Pill>
+                    )}
                   </td>
                   <td className="td text-right mono">{u.callsToday}</td>
                   <td className="td text-right mono text-zinc-400">{u.callsWeek}</td>
@@ -468,10 +474,13 @@ function UserTable({ rows, onOpenUser }: { rows: any[]; onOpenUser: (id: string)
 function Users({ onOpenUser, onChanged }: { onOpenUser: (id: string) => void; onChanged: () => void }) {
   const [rows, setRows] = useState<any[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   const load = useCallback(() => {
-    j('/api/admin/users').then((d) => setRows(d.rows)).catch(() => setRows([]));
-  }, []);
+    j(`/api/admin/users${showDeleted ? '?includeDeleted=1' : ''}`)
+      .then((d) => setRows(d.rows))
+      .catch(() => setRows([]));
+  }, [showDeleted]);
   useEffect(load, [load]);
 
   return (
@@ -481,9 +490,20 @@ function Users({ onOpenUser, onChanged }: { onOpenUser: (id: string) => void; on
           <h1 className="text-lg font-semibold tracking-tight">Users</h1>
           <p className="mt-0.5 text-xs text-muted">Create people, set their permissions, open their leads.</p>
         </div>
-        <button className="btn-primary !py-2 text-xs" onClick={() => setAdding(true)}>
-          New user
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => setShowDeleted(e.target.checked)}
+              className="accent-check"
+            />
+            show deleted
+          </label>
+          <button className="btn-primary !py-2 text-xs" onClick={() => setAdding(true)}>
+            New user
+          </button>
+        </div>
       </div>
 
       {rows ? <UserTable rows={rows} onOpenUser={onOpenUser} /> : <Splash />}
@@ -611,7 +631,13 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h1 className="truncate text-lg font-semibold tracking-tight">{u.fullName || 'Unnamed user'}</h1>
-            {u.isActive ? <Pill tone="ok">active</Pill> : <Pill tone="off">disabled</Pill>}
+            {u.deletedAt ? (
+              <Pill tone="muted">deleted</Pill>
+            ) : u.isActive ? (
+              <Pill tone="ok">active</Pill>
+            ) : (
+              <Pill tone="off">disabled</Pill>
+            )}
           </div>
           <p className="mt-0.5 text-xs text-muted">{u.email}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -937,18 +963,34 @@ function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
       <div className="panel border-red-950/60 p-4 lg:col-span-2">
         <h2 className="text-sm font-semibold text-red-300">Danger zone</h2>
         <p className="mt-1 text-2xs text-muted">
-          Deleting removes the login. Their leads become unassigned; call history is kept but detached.
+          Deleting signs them out and hides the account. Their name stays on past calls, and their leads move to the
+          longest-standing teammate — or stay with them if they are the last account.
         </p>
-        <button
-          className="btn-ghost mt-3 !border-red-900/60 !py-1.5 text-xs !text-red-300"
-          onClick={async () => {
-            if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return;
-            await del(`/api/admin/users/${user.id}`);
-            window.location.reload();
-          }}
-        >
-          Delete this user
-        </button>
+        {user.deletedAt ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Pill tone="muted">deleted {fmtNY(user.deletedAt)}</Pill>
+            <button
+              className="btn-ghost !py-1.5 text-xs"
+              onClick={async () => {
+                await post(`/api/admin/users/${user.id}/restore`);
+                window.location.reload();
+              }}
+            >
+              Restore account
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn-ghost mt-3 !border-red-900/60 !py-1.5 text-xs !text-red-300"
+            onClick={async () => {
+              if (!confirm(`Delete ${user.email}? They are signed out and the account is hidden.`)) return;
+              await del(`/api/admin/users/${user.id}`);
+              window.location.reload();
+            }}
+          >
+            Delete this user
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1036,7 +1078,16 @@ function CallTable({ data }: { data: any }) {
                   )}
                 </td>
                 <td className="td text-right mono text-zinc-400">{c.duration_sec ? fmtTalk(c.duration_sec) : '—'}</td>
-                <td className="td text-2xs text-zinc-500">{c.user_email || '—'}</td>
+                <td className="td text-2xs text-zinc-500">
+                  {c.user_email ? (
+                    <>
+                      {c.user_email}
+                      {c.user_deleted && <span className="text-zinc-600"> (deleted)</span>}
+                    </>
+                  ) : (
+                    <span className="text-zinc-600">(Deleted user)</span>
+                  )}
+                </td>
                 <td className="td text-right whitespace-nowrap">
                   {c.recording_sid || c.recording_path ? (
                     <div className="flex items-center justify-end gap-1">
