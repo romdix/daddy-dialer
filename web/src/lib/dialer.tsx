@@ -556,8 +556,13 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
 
   const hangup = useCallback(() => {
     const bid = batchRef.current;
+    const callLogId = activeRef.current?.callLogId;
     if (bid) {
       api.post(`/api/voice/batch/${bid}/end`, {}).catch(() => {});
+    } else if (callLogId) {
+      // Also ends the lead's leg: a phone that is still ringing is not in the
+      // conference yet, so disconnecting here alone leaves it ringing.
+      api.post('/api/voice/end', { callLogId }).catch(() => {});
     }
     try {
       callRef.current?.disconnect();

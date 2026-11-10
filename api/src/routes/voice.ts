@@ -575,6 +575,19 @@ voiceRouter.post(
     }
 
     if (ev === 'end') {
+      // Safety net for a closed tab or a browser crash: the room ends when the
+      // agent's leg goes, but a lead who is still ringing never joined it, so
+      // hang their leg up here too.
+      const fresh = await one<any>(`select * from call_logs where id=$1`, [callLogId]);
+      if (fresh && !fresh.connected_at && String(fresh.lead_call_sid || '').startsWith('CA')) {
+        try {
+          const s2 = await loadSettings(fresh.workspace_id);
+          await getProvider(fresh.provider).endCall?.(s2, String(fresh.lead_call_sid));
+          console.log('[voice] hung up ringing lead leg on conference end', String(fresh.lead_call_sid).slice(0, 8));
+        } catch {
+          /* already gone */
+        }
+      }
       await q(
         `update call_logs set ended_at=coalesce(ended_at, now()),
                 status = case when connected_at is not null and status not in ('completed') then 'completed' else status end,
@@ -583,6 +596,46 @@ voiceRouter.post(
         [callLogId],
       );
     }
+  }),
+);
+
+/**
+ * Hang up the whole call, from the agent's side.
+ *
+ * Leaving the conference only closes the room. A lead whose phone is still
+ * ringing is not a participant yet, so the room ending does not cancel their
+ * leg — their phone keeps ringing until the carrier timeout. This ends the
+ * lead's leg explicitly.
+ */
+voiceRouter.post(
+  '/end',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const callLogId = String(req.body?.callLogId || '');
+    if (!isUuid(callLogId)) return res.status(400).json({ error: 'Bad call id' });
+
+    const call = await one<any>(`select * from call_logs where id=$1 and workspace_id=$2`, [callLogId, ws]);
+    if (!call) return res.status(404).json({ error: 'Call not found' });
+
+    if (String(call.lead_call_sid || '').startsWith('CA')) {
+      try {
+        const s = await loadSettings(call.workspace_id);
+        await getProvider(call.provider).endCall?.(s, String(call.lead_call_sid));
+        console.log('[voice] hung up lead leg on agent hangup', String(call.lead_call_sid).slice(0, 8));
+      } catch {
+        /* already gone */
+      }
+    }
+
+    await q(
+      `update call_logs set status='completed', ended_at=coalesce(ended_at, now()),
+              duration_sec = greatest(duration_sec, coalesce(extract(epoch from (now()-connected_at))::int, 0))
+        where id=$1 and status not in ('completed','failed','no_answer','busy','canceled')`,
+      [callLogId],
+    );
+
+    res.json({ ok: true });
   }),
 );
 
