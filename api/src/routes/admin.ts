@@ -59,7 +59,8 @@ const userColumns = `u.id, u.email, u.full_name as "fullName", u.is_active as "i
   u.caller_id as "callerId", u.parallel_lines as "parallelLines", u.created_at as "createdAt"`;
 
 const userStats = `(select count(*) from leads l where l.assigned_user_id = u.id)::int as "leadsAssigned",
-  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('day', now()))::int as "callsToday",
+  (select count(*) from call_logs c where c.user_id = u.id
+     and c.called_at >= date_trunc('day', now() at time zone 'America/New_York') at time zone 'America/New_York')::int as "callsToday",
   (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '7 days')::int as "callsWeek",
   (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '30 days')::int as "callsMonth",
   (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= now() - interval '30 days'
@@ -81,7 +82,8 @@ adminRouter.get(
       `select
          (select count(*) from leads where workspace_id=$1)::int as leads,
          (select count(*) from leads where workspace_id=$1 and assigned_user_id is null)::int as unassigned,
-         (select count(*) from call_logs where workspace_id=$1 and called_at >= date_trunc('day', now()))::int as calls_today,
+         (select count(*) from call_logs where workspace_id=$1
+            and called_at >= date_trunc('day', now() at time zone 'America/New_York') at time zone 'America/New_York')::int as calls_today,
          (select count(*) from call_logs where workspace_id=$1 and called_at >= date_trunc('month', now()))::int as calls_month
        `,
       [ws],
