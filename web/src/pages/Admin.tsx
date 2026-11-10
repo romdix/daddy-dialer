@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Leads } from './Leads';
+import { ImportDialog } from './ImportDialog';
 import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { VoicemailPanel } from '../components/VoicemailPanel';
 import { DataPanel } from '../components/DataPanel';
@@ -190,6 +191,7 @@ type View =
   | { kind: 'overview' }
   | { kind: 'users' }
   | { kind: 'user'; id: string }
+  | { kind: 'pool' }
   | { kind: 'calls' }
   | { kind: 'settings' };
 
@@ -236,6 +238,7 @@ export function Admin() {
   const nav: { key: View['kind']; label: string }[] = [
     { key: 'overview', label: 'Overview' },
     { key: 'users', label: 'Users' },
+    { key: 'pool', label: 'Leads' },
     { key: 'calls', label: 'Calls' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -284,11 +287,16 @@ export function Admin() {
           <Users onOpenUser={(id) => setView({ kind: 'user', id })} onChanged={loadSession} />
         )}
         {view.kind === 'user' && <UserPage id={view.id} onBack={() => setView({ kind: 'users' })} />}
+        {view.kind === 'pool' && <LeadPool />}
         {view.kind === 'calls' && <Calls />}
         {view.kind === 'settings' && <AdminSettings />}
       </main>
     </div>
   );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <label className="label">{children}</label>;
 }
 
 function Splash() {
@@ -1359,6 +1367,379 @@ function AdminSettings() {
       <CallerIdsPanel />
       <VoicemailPanel />
       <DataPanel />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Lead pool — the admin's own unassigned leads
+ * ------------------------------------------------------------------ */
+
+const POOL_QTY = [50, 100, 200, 300, 400, 500, 1000];
+
+function LeadPool() {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [uploads, setUploads] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [qty, setQty] = useState(100);
+  const [target, setTarget] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    const [pool, ups, us] = await Promise.all([
+      j(`/api/admin/pool/leads?page=${page}&limit=50&search=${encodeURIComponent(search)}`),
+      j('/api/admin/pool/uploads'),
+      j('/api/admin/users'),
+    ]);
+    setRows(pool.rows || []);
+    setTotal(pool.total || 0);
+    setPages(pool.pages || 1);
+    setUploads(ups.rows || []);
+    setUsers((us.rows || []).filter((u: any) => !u.deletedAt));
+  }, [page, search]);
+
+  useEffect(() => {
+    load().catch(() => setRows([]));
+  }, [load]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setSelected([]);
+  }, [page, search]);
+
+  const assign = async (body: any, done: string) => {
+    if (!target) {
+      setMsg('Pick a user first');
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await post('/api/admin/pool/assign', { userId: target, ...body });
+      setMsg(`${done}: ${r.assigned} lead${r.assigned === 1 ? '' : 's'}`);
+      setSelected([]);
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not assign');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const assignUpload = async (id: string) => {
+    if (!target) {
+      setMsg('Pick a user first');
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await post(`/api/admin/pool/uploads/${id}/assign`, { userId: target });
+      setMsg(`Assigned ${r.assigned} from that file`);
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not assign');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeUpload = async (id: string, name: string, remaining: number) => {
+    if (!confirm(`Delete "${name}"? Its ${remaining} unassigned leads are deleted; leads already given to a rep are kept.`)) return;
+    setBusy(true);
+    try {
+      const r = await del(`/api/admin/pool/uploads/${id}`);
+      setMsg(`Removed ${r.removed} unassigned leads`);
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not delete');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const allOnPage = (rows || []).map((r) => r.id);
+  const allChecked = allOnPage.length > 0 && allOnPage.every((id) => selected.includes(id));
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Leads</h1>
+          <p className="mt-0.5 text-xs text-muted">
+            Leads you have not handed out. Reps never see this page, and their own leads never appear here.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost !py-2 text-xs" onClick={() => setAdding(true)}>
+            Add lead
+          </button>
+          <button className="btn-primary !py-2 text-xs" onClick={() => setImportOpen(true)}>
+            Upload CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="panel flex flex-wrap items-end gap-4 p-4">
+        <div>
+          <Label>Take from the pool</Label>
+          <select className="field !w-auto !py-1.5 text-xs" value={qty} onChange={(e) => setQty(Number(e.target.value))}>
+            {POOL_QTY.map((n) => (
+              <option key={n} value={n}>
+                {n} leads
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label>Assign to</Label>
+          <select className="field !w-56 !py-1.5 text-xs" value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">Choose a user…</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.fullName ? `${u.fullName} — ${u.email}` : u.email}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="btn-primary !py-2 text-xs" disabled={busy || !target} onClick={() => assign({ limit: qty }, `Assigned ${qty}`)}>
+          Assign {qty}
+        </button>
+        {selected.length > 0 && (
+          <button
+            className="btn-ghost !py-2 text-xs"
+            disabled={busy || !target}
+            onClick={() => assign({ leadIds: selected }, 'Assigned selected')}
+          >
+            Assign {selected.length} selected
+          </button>
+        )}
+        <span className="ml-auto text-2xs text-muted">{total.toLocaleString()} unassigned in the pool</span>
+      </div>
+
+      {msg && <p className="text-xs text-accent">{msg}</p>}
+
+      <div className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-ink-800 px-4 py-3">
+          <h2 className="text-sm font-semibold">Uploads</h2>
+          <input
+            className="field !w-56 !py-1.5 text-xs"
+            placeholder="Search the pool"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-ink-900">
+              <tr>
+                <th className="th">File</th>
+                <th className="th">Uploaded</th>
+                <th className="th text-right">Rows</th>
+                <th className="th text-right">Left</th>
+                <th className="th text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {uploads.map((u) => (
+                <tr key={u.id}>
+                  <td className="td max-w-[320px] truncate">{u.filename}</td>
+                  <td className="td text-2xs text-zinc-500">{fmtNY(u.created_at)}</td>
+                  <td className="td text-right mono text-zinc-400">{u.total}</td>
+                  <td className="td text-right mono">
+                    {u.remaining > 0 ? u.remaining : <span className="text-zinc-600">0</span>}
+                  </td>
+                  <td className="td text-right whitespace-nowrap">
+                    <div className="flex justify-end gap-1">
+                      <button
+                        className="btn-ghost !px-2 !py-1 text-2xs"
+                        disabled={busy || u.remaining === 0}
+                        onClick={() => assignUpload(u.id)}
+                      >
+                        Assign remaining
+                      </button>
+                      <button
+                        className="btn-ghost !px-2 !py-1 text-2xs !text-red-300"
+                        disabled={busy}
+                        onClick={() => removeUpload(u.id, u.filename, u.remaining)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {uploads.length === 0 && (
+          <p className="px-4 py-8 text-center text-xs text-muted">No files yet. Use “Upload CSV” to add a list.</p>
+        )}
+      </div>
+
+      <div className="panel overflow-hidden">
+        <div className="border-b border-ink-800 px-4 py-3">
+          <h2 className="text-sm font-semibold">Unassigned leads</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-ink-900">
+              <tr>
+                <th className="th w-8">
+                  <input
+                    type="checkbox"
+                    className="accent-check"
+                    checked={allChecked}
+                    onChange={(e) =>
+                      setSelected(e.target.checked ? allOnPage : selected.filter((id) => !allOnPage.includes(id)))
+                    }
+                  />
+                </th>
+                <th className="th">Business</th>
+                <th className="th">Phone</th>
+                <th className="th">City</th>
+                <th className="th">Upload</th>
+                <th className="th">Added</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(rows || []).map((l) => (
+                <tr key={l.id} className={selected.includes(l.id) ? 'bg-ink-800/60' : undefined}>
+                  <td className="td">
+                    <input
+                      type="checkbox"
+                      className="accent-check"
+                      checked={selected.includes(l.id)}
+                      onChange={(e) =>
+                        setSelected(e.target.checked ? [...selected, l.id] : selected.filter((id) => id !== l.id))
+                      }
+                    />
+                  </td>
+                  <td className="td max-w-[260px] truncate">{l.business_name || <span className="text-zinc-600">Unnamed</span>}</td>
+                  <td className="td mono text-zinc-300">{l.phone}</td>
+                  <td className="td text-zinc-400">{[l.city, l.state].filter(Boolean).join(', ') || '—'}</td>
+                  <td className="td max-w-[200px] truncate text-2xs text-zinc-500">{l.upload_name || '—'}</td>
+                  <td className="td text-2xs text-zinc-500">{fmtNY(l.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {rows && rows.length === 0 && (
+          <p className="px-4 py-10 text-center text-xs text-muted">
+            The pool is empty. Upload a CSV to start it.
+          </p>
+        )}
+        {pages > 1 && (
+          <div className="flex items-center justify-between border-t border-ink-800 px-4 py-3 text-2xs text-muted">
+            <span>
+              Page {page} of {pages} · {total} leads
+            </span>
+            <div className="flex gap-2">
+              <button className="btn-ghost !py-1 text-2xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                Previous
+              </button>
+              <button className="btn-ghost !py-1 text-2xs" disabled={page >= pages} onClick={() => setPage(page + 1)}>
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <ImportDialog
+        open={importOpen}
+        pool
+        onClose={() => setImportOpen(false)}
+        onDone={async () => {
+          setPage(1);
+          await load();
+        }}
+      />
+
+      {adding && (
+        <NewPoolLead
+          onClose={() => setAdding(false)}
+          onDone={async () => {
+            setAdding(false);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NewPoolLead({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState<any>({ business_name: '', phone: '', city: '', state: '', notes: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post('/api/admin/pool/leads', form);
+      onDone();
+    } catch (e: any) {
+      setError(e?.message || 'Could not add the lead');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="panel w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-semibold">Add a lead to the pool</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Label>Business name</Label>
+            <input className="field" value={form.business_name} onChange={(e) => setForm({ ...form, business_name: e.target.value })} />
+          </div>
+          <div>
+            <Label>Phone</Label>
+            <input className="field mono" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+          </div>
+          <div>
+            <Label>City</Label>
+            <input className="field" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+          </div>
+          <div>
+            <Label>State</Label>
+            <input className="field" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+          </div>
+          <div className="sm:col-span-2">
+            <Label>Notes</Label>
+            <textarea className="field h-20" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+        </div>
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+        <div className="mt-4 flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={submit} disabled={busy || !form.phone}>
+            {busy ? 'Adding…' : 'Add to pool'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

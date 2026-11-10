@@ -10,6 +10,19 @@ alter table users add column if not exists updated_at timestamptz not null defau
 -- the admin can still open the account to move its leads or restore it.
 alter table users add column if not exists deleted_at timestamptz;
 
+-- Uploaded lead files, so a whole file can be handed to a rep later.
+create table if not exists lead_uploads (
+  id          uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  filename    text not null,
+  total       integer not null default 0,
+  created_at  timestamptz not null default now()
+);
+create index if not exists lead_uploads_ws on lead_uploads (workspace_id, created_at desc);
+
+alter table leads add column if not exists upload_id uuid references lead_uploads(id) on delete set null;
+create index if not exists leads_upload on leads (upload_id);
+
 -- A lead belongs to one rep. Unassigned leads are visible only to the admin.
 alter table leads add column if not exists assigned_user_id uuid references users(id) on delete set null;
 create index if not exists leads_assigned on leads (assigned_user_id);

@@ -32,11 +32,13 @@ const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 export function ImportDialog({
   open,
   asUserId,
+  pool,
   onClose,
   onDone,
 }: {
   open: boolean;
   asUserId?: string;
+  pool?: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -112,9 +114,15 @@ export function ImportDialog({
       let invalid = 0;
       const CHUNK = 500;
       for (let i = 0; i < records.length; i += CHUNK) {
-        const res = await api.post<any>(`/api/leads/import${asUserId ? `?userId=${asUserId}` : ''}`, {
-          records: records.slice(i, i + CHUNK),
-        });
+        const slice = records.slice(i, i + CHUNK);
+        const res = pool
+          ? await api.post<any>('/api/admin/pool/import', {
+              records: slice,
+              filename: fileName || 'pasted.csv',
+            })
+          : await api.post<any>(`/api/leads/import${asUserId ? `?userId=${asUserId}` : ''}`, {
+              records: slice,
+            });
         created += res.created;
         duplicates += res.duplicates;
         invalid += res.invalid;
