@@ -21,14 +21,14 @@ export function Shell() {
 
   return (
     <DialerProvider workspaceId={me.workspace.id}>
-      <div className="flex min-h-screen">
-        <aside className="w-[210px] shrink-0 border-r border-ink-800 bg-ink-900/60">
-          <div className="flex items-center gap-2 px-4 h-14 border-b border-ink-800">
+      <div className="flex h-screen overflow-hidden">
+        <aside className="flex w-[210px] shrink-0 flex-col border-r border-ink-800 bg-ink-900/60">
+          <div className="flex h-14 items-center gap-2 border-b border-ink-800 px-4">
             <BrandMark size={24} />
             <span className="truncate font-semibold tracking-tight">{brand.name}</span>
           </div>
 
-          <nav className="p-2 space-y-0.5">
+          <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
             {NAV.map((n) => (
               <NavLink
                 key={n.to}
@@ -45,7 +45,7 @@ export function Shell() {
             ))}
           </nav>
 
-          <div className="absolute bottom-0 w-[210px] border-t border-ink-800 p-3">
+          <div className="border-t border-ink-800 p-3">
             <p className="truncate text-xs text-zinc-300">{me.user.fullName || me.user.email}</p>
             <p className="truncate text-2xs text-muted">{me.workspace.name}</p>
             <button
@@ -60,7 +60,7 @@ export function Shell() {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1">
+        <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>
 

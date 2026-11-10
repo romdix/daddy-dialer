@@ -1,40 +1,15 @@
-import { useState } from 'react';
-import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { useDialer } from '../lib/dialer';
 import { useAuth } from '../lib/auth';
 
 /**
  * Staff settings. Anything that affects money, calling or compliance is
- * administered from /admin; a rep can only touch their own microphone and
- * password here.
+ * administered from /admin; a rep can only choose their own microphone here.
  */
 export function Settings() {
-  const { me, refresh } = useAuth();
+  const { me } = useAuth();
   const d = useDialer();
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
   const user = (me?.user || {}) as any;
-
-  const changePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setMsg(null);
-    try {
-      await api.post('/api/auth/password', { current, next });
-      setCurrent('');
-      setNext('');
-      setMsg('Password changed.');
-      refresh();
-    } catch (e: any) {
-      setMsg(e?.message || 'Could not change the password');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <div>
@@ -53,7 +28,6 @@ export function Settings() {
             <dt className="text-muted">Recordings</dt>
             <dd>{user.canHearRecordings ? 'allowed' : 'not allowed'}</dd>
           </dl>
-          <p className="mt-3 text-2xs text-muted">Ask your administrator if any of these need to change.</p>
         </section>
 
         <section className="panel p-4">
@@ -80,44 +54,6 @@ export function Settings() {
             </button>
           </div>
         </section>
-
-        <section className="panel p-4">
-          <h2 className="text-sm font-semibold">Change password</h2>
-          <form onSubmit={changePassword} className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Current password</label>
-              <input
-                className="field"
-                type="password"
-                value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-                autoComplete="current-password"
-              />
-            </div>
-            <div>
-              <label className="label">New password</label>
-              <input
-                className="field"
-                type="password"
-                value={next}
-                onChange={(e) => setNext(e.target.value)}
-                autoComplete="new-password"
-                placeholder="At least 8 characters"
-              />
-            </div>
-            <div className="flex items-center gap-3 sm:col-span-2">
-              <button className="btn-primary !py-1.5 text-xs" disabled={busy || next.length < 8}>
-                {busy ? 'Saving…' : 'Update password'}
-              </button>
-              {msg && <span className="text-2xs text-accent">{msg}</span>}
-            </div>
-          </form>
-        </section>
-
-        <p className="text-2xs text-muted">
-          Phone numbers, Twilio credentials, recording and dialling options are managed by your administrator at{' '}
-          <span className="mono">/admin</span>.
-        </p>
       </div>
     </div>
   );
