@@ -265,8 +265,9 @@ leadsRouter.get(
   requireAuth,
   wrap(async (req, res) => {
     const row = await one(
-      `select * from leads where id=$1 and workspace_id=$2 and assigned_user_id=$3`,
-      [req.params.id, req.ctx!.workspaceId, req.ctx!.userId],
+      `select * from leads
+        where id=$1 and workspace_id=$2 and ($3::uuid is null or assigned_user_id=$3)`,
+      [req.params.id, req.ctx!.workspaceId, (req as any).isAdminAsUser ? null : req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Lead not found' });
     const calls = await q(
@@ -344,11 +345,12 @@ leadsRouter.delete(
   '/:id',
   requireAuth,
   wrap(async (req, res) => {
-    const r = await q(`delete from leads where id=$1 and workspace_id=$2 and assigned_user_id=$3 returning id`, [
-      req.params.id,
-      req.ctx!.workspaceId,
-      req.ctx!.userId,
-    ]);
+    const r = await q(
+      `delete from leads
+        where id=$1 and workspace_id=$2 and ($3::uuid is null or assigned_user_id=$3)
+        returning id`,
+      [req.params.id, req.ctx!.workspaceId, (req as any).isAdminAsUser ? null : req.ctx!.userId],
+    );
     if (!r.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
   }),
