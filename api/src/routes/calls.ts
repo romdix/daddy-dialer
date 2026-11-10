@@ -56,7 +56,7 @@ callsRouter.get(
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
     const rows = await q<any>(
-      `select c.called_at, c.direction, c.from_number, c.to_number,
+      `select to_char(c.called_at,'YYYY-MM-DD HH24:MI:SS') as called_at, c.direction, c.from_number, c.to_number,
               coalesce(l.business_name,'') as business, coalesce(c.outcome,'') as outcome,
               c.status, c.duration_sec, coalesce(c.answered_by,'') as answered_by,
               coalesce(s.name,'') as session_name, coalesce(c.notes,'') as notes

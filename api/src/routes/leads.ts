@@ -130,8 +130,11 @@ leadsRouter.get(
     const ws = req.ctx!.workspaceId;
     const rows = await q<any>(
       `select business_name, phone, address, city, state, zip, website, email,
-              status, coalesce(outcome,'') as outcome, attempts, last_called_at, callback_at,
-              coalesce(notes,'') as notes, created_at
+              status, coalesce(outcome,'') as outcome, attempts,
+              to_char(last_called_at,'YYYY-MM-DD HH24:MI:SS') as last_called_at,
+              to_char(callback_at,'YYYY-MM-DD HH24:MI:SS') as callback_at,
+              coalesce(notes,'') as notes,
+              to_char(created_at,'YYYY-MM-DD HH24:MI:SS') as created_at
          from leads where workspace_id=$1 order by created_at asc limit 100000`,
       [ws],
     );
