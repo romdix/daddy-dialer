@@ -220,9 +220,10 @@ voiceRouter.post(
 
     const s = await loadSettings(workspaceId);
     const p = getProvider(call.provider);
-    const settingsRow = await one<any>(`select recording_enabled, ring_timeout_sec from settings where workspace_id=$1`, [
-      workspaceId,
-    ]);
+    const settingsRow = await one<any>(
+      `select recording_enabled, ring_timeout_sec, amd_enabled from settings where workspace_id=$1`,
+      [workspaceId],
+    );
 
     // Second gate: Twilio is asking us what to dial, so re-check compliance here too.
     if (call.lead_id) {
@@ -252,6 +253,7 @@ voiceRouter.post(
       mode: 'conference' as const,
       record: settingsRow?.recording_enabled !== false,
       ringTimeout: settingsRow?.ring_timeout_sec || 60,
+      detectVoicemail: settingsRow?.amd_enabled !== false,
     };
 
     // No conference support (e.g. Telnyx) -> legacy single-leg markup.
@@ -291,6 +293,7 @@ voiceRouter.post(
           workspaceId,
           publicUrl,
           ringTimeout: request.ringTimeout,
+          detectVoicemail: request.detectVoicemail,
         });
         await q(`update call_logs set lead_call_sid=$2, provider_call_id=$2 where id=$1`, [callLogId, r.sid]);
         console.log('[voice] lead dialed', callLogId.slice(0, 8), r.sid);

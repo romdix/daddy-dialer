@@ -23,6 +23,8 @@ export interface OutboundRequest {
   mode?: 'pstn' | 'conference';
   record?: boolean;
   ringTimeout?: number;
+  /** Run answering-machine detection (billed per call by the provider). */
+  detectVoicemail?: boolean;
 }
 
 export interface DialerProvider {
@@ -49,6 +51,7 @@ export interface DialerProvider {
       workspaceId: string;
       publicUrl: string;
       ringTimeout?: number;
+      detectVoicemail?: boolean;
     },
   ): Promise<{ sid: string }>;
   /** Normalized numbers the workspace can call from. */

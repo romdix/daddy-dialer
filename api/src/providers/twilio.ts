@@ -153,10 +153,15 @@ export const twilioProvider: DialerProvider = {
       statusCallbackMethod: 'POST',
       // Asynchronous detection: the call proceeds normally while Twilio listens,
       // and reports "human" vs "machine" a few seconds later. No dead air.
-      machineDetection: 'Enable',
-      asyncAmd: 'true',
-      asyncAmdStatusCallback: `${o.publicUrl}/api/voice/amd?${qs}`,
-      asyncAmdStatusCallbackMethod: 'POST',
+      // Billed per call, so it can be switched off in Settings.
+      ...(o.detectVoicemail === false
+        ? {}
+        : {
+            machineDetection: 'Enable' as const,
+            asyncAmd: 'true',
+            asyncAmdStatusCallback: `${o.publicUrl}/api/voice/amd?${qs}`,
+            asyncAmdStatusCallbackMethod: 'POST',
+          }),
     });
     return { sid: call.sid };
   },

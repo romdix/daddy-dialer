@@ -6,3 +6,6 @@ alter table call_logs add column if not exists recording_copied_at timestamptz;
 alter table call_logs add column if not exists recording_purged_at timestamptz;
 
 alter table settings add column if not exists recording_retention_days int not null default 7;
+
+-- Answering-machine detection is billed per call, so it must be switchable.
+alter table settings add column if not exists amd_enabled boolean not null default true;

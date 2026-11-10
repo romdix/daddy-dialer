@@ -13,6 +13,7 @@ interface SettingsShape {
   telnyx: { apiKey: string; connectionId: string; number: string };
   recordingEnabled: boolean;
   recordingRetentionDays: number;
+  amdEnabled: boolean;
   ringTimeoutSec: number;
   compliance: {
     enforce: boolean;
@@ -450,6 +451,22 @@ export function Settings() {
                 type="checkbox"
                 checked={form.recordingEnabled}
                 onChange={(e) => setForm({ ...form, recordingEnabled: e.target.checked })}
+                className="h-4 w-4 accent-check"
+              />
+            </label>
+
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span>
+                Detect voicemail
+                <span className="block text-2xs text-muted">
+                  Twilio listens for the first few seconds and marks machines automatically. Billed at
+                  $0.0075 per call — turn it off to save that fee.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={form.amdEnabled}
+                onChange={(e) => setForm({ ...form, amdEnabled: e.target.checked })}
                 className="h-4 w-4 accent-check"
               />
             </label>
