@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'node:fs';
 import { q, one } from '../db';
-import { requireAuth, wrap } from '../middleware';
+import { requireAuth, requireWorkspace, wrap } from '../middleware';
 import { dec } from '../crypto';
 import { ensureConfigured, getProvider, type ProviderSettings } from '../providers';
 import { baseUrl } from '../baseurl';
@@ -214,10 +214,10 @@ voiceRouter.post(
     if (!fromNumber) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
     const row = await one<any>(
-      `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at)
-       values ($1,$2,$3,$4,$5,$6,'queued', now())
+      `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at, user_id)
+       values ($1,$2,$3,$4,$5,$6,'queued', now(), $7)
        returning id`,
-      [ws, req.body?.leadId || null, req.body?.sessionId || null, p.id, fromNumber, toE164(norm)],
+      [ws, req.body?.leadId || null, req.body?.sessionId || null, p.id, fromNumber, toE164(norm), req.ctx!.userId],
     );
 
     const signing = await ensureTwimlApp(ws, await ensureApiKey(ws, s), req);
@@ -814,17 +814,17 @@ async function voicemailConfig(ws: string) {
 
 voiceRouter.get(
   '/voicemail',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    res.json(await voicemailConfig(req.ctx!.workspaceId));
+    res.json(await voicemailConfig((req as any).ws));
   }),
 );
 
 voiceRouter.put(
   '/voicemail',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    const ws = (req as any).ws;
     const b = req.body || {};
 
     if (b.removeAudio === true) deleteVoicemailAudio(ws);
@@ -943,9 +943,9 @@ voiceRouter.post(
       const to = toE164(norm);
       const from = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), to);
       const row = await one<any>(
-        `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at, batch_id)
-         values ($1,$2,$3,$4,$5,$6,'queued',now(),$7) returning id`,
-        [ws, lead.id, req.body?.sessionId || null, p.id, from, to, batch.id],
+        `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at, batch_id, user_id)
+         values ($1,$2,$3,$4,$5,$6,'queued',now(),$7,$8) returning id`,
+        [ws, lead.id, req.body?.sessionId || null, p.id, from, to, batch.id, req.ctx!.userId],
       );
       await q(`update leads set attempts=attempts+1, last_called_at=now() where id=$1`, [lead.id]);
       calls.push({ callLogId: row.id, leadId: lead.id, to, from });

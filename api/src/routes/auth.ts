@@ -28,36 +28,9 @@ async function startSession(res: any, userId: string) {
 
 authRouter.post(
   '/signup',
-  wrap(async (req, res) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const password = String(req.body?.password || '');
-    const fullName = String(req.body?.fullName || '').trim() || null;
-
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
-    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-
-    const existing = await one(`select id from users where lower(email)=lower($1)`, [email]);
-    if (existing) return res.status(409).json({ error: 'That email already has an account. Sign in instead.' });
-
-    const hash = await bcrypt.hash(password, 10);
-    const userId = await tx(async (c) => {
-      const u = await c.query(`insert into users (email, password_hash, full_name) values ($1,$2,$3) returning id`, [
-        email,
-        hash,
-        fullName,
-      ]);
-      const uid = u.rows[0].id as string;
-      const w = await c.query(`insert into workspaces (name) values ($1) returning id`, [
-        `${fullName || email.split('@')[0]}'s workspace`,
-      ]);
-      const wid = w.rows[0].id as string;
-      await c.query(`insert into workspace_members (workspace_id, user_id, role) values ($1,$2,'owner')`, [wid, uid]);
-      await c.query(`insert into settings (workspace_id) values ($1)`, [wid]);
-      return uid;
-    });
-
-    await startSession(res, userId);
-    res.json({ ok: true });
+  wrap(async (_req, res) => {
+    // Accounts are created by the administrator.
+    res.status(403).json({ error: 'Sign-up is disabled. Ask your administrator for an account.' });
   }),
 );
 
@@ -66,11 +39,12 @@ authRouter.post(
   wrap(async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
-    const user = await one<{ id: string; password_hash: string }>(
-      `select id, password_hash from users where lower(email)=lower($1)`,
+    const user = await one<{ id: string; password_hash: string; is_active: boolean }>(
+      `select id, password_hash, is_active from users where lower(email)=lower($1)`,
       [email],
     );
     if (!user) return res.status(401).json({ error: 'Wrong email or password' });
+    if (!user.is_active) return res.status(403).json({ error: 'This account has been disabled. Contact your administrator.' });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Wrong email or password' });
     await startSession(res, user.id);
@@ -122,7 +96,13 @@ authRouter.get(
     const ctx = req.ctx!;
     const s = await one<any>(`select * from settings where workspace_id=$1`, [ctx.workspaceId]);
     res.json({
-      user: { id: ctx.userId, email: ctx.email, fullName: ctx.fullName },
+      user: {
+        id: ctx.userId,
+        email: ctx.email,
+        fullName: ctx.fullName,
+        canUploadLeads: ctx.canUploadLeads,
+        canHearRecordings: ctx.canHearRecordings,
+      },
       workspace: { id: ctx.workspaceId, name: ctx.workspaceName },
       provider: s?.provider || 'twilio',
       twilio: {

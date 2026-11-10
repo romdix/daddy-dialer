@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { migrate, pool, seedBrandFromEnv } from './db';
-import { attachUser } from './middleware';
+import { attachUser, attachWorkspace } from './middleware';
 import { purgeTwilioRecordings } from './recordings';
 import { authRouter } from './routes/auth';
 import { leadsRouter } from './routes/leads';
@@ -15,6 +15,7 @@ import { settingsRouter } from './routes/settings';
 import { brandRouter } from './routes/brand';
 import { voiceRouter } from './routes/voice';
 import { callerIdsRouter } from './routes/callerids';
+import { adminRouter } from './routes/admin';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -23,6 +24,7 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 app.use(cookieParser());
 app.use(attachUser);
+app.use(attachWorkspace);
 
 app.get('/api/health', async (_req, res) => {
   try {
@@ -41,6 +43,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/brand', brandRouter);
 app.use('/api/caller-ids', callerIdsRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/voice', voiceRouter);
 
 // Built frontend (production / docker)

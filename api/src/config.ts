@@ -31,6 +31,13 @@ export const config = {
   /** Set to e.g. ".romdix.com" to share the login cookie across subdomains. */
   cookieDomain: process.env.COOKIE_DOMAIN || undefined,
 
+  /**
+   * Platform admin, separate from the staff logins. Set both in the host's
+   * environment; the admin area at /admin is closed until you do.
+   */
+  adminUsername: process.env.ADMIN_USERNAME || '',
+  adminPassword: process.env.ADMIN_PASSWORD || '',
+
   /** Branding defaults. Applied on first boot only; Settings wins afterwards. */
   brand: {
     name: process.env.BRAND_NAME || '',

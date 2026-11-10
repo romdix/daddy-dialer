@@ -73,14 +73,14 @@ sessionsRouter.post(
     const f: LeadFilter = req.body?.filter || {};
     const excludeDnc = req.body?.excludeDoNotCall !== false;
 
-    const where = buildLeadWhere(f, 3);
+    const where = buildLeadWhere(f, 3, req.ctx!.userId);
     const dnc = excludeDnc ? `and coalesce(outcome,'') <> 'do_not_call'` : '';
 
     const out = await tx(async (c) => {
-      const s = await c.query(`insert into calling_sessions (workspace_id, name) values ($1,$2) returning *`, [
-        ws,
-        name,
-      ]);
+      const s = await c.query(
+        `insert into calling_sessions (workspace_id, name, owner_user_id) values ($1,$2,$3) returning *`,
+        [ws, name, req.ctx!.userId],
+      );
       const sessionId = s.rows[0].id as string;
 
       // One row per phone number: the queue must never call the same business

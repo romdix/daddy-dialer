@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { q, one, tx } from '../db';
-import { requireAuth, wrap } from '../middleware';
+import { requireAuth, requirePerm, wrap } from '../middleware';
 import { buildLeadWhere, normalizePhone, formatPhone, SORTABLE, type LeadFilter } from '../filters';
 import { OUTCOMES, STATUSES } from '../config';
 import { checkCallable } from '../compliance';
@@ -46,7 +46,7 @@ leadsRouter.get(
     const offset = (page - 1) * limit;
 
     const filter = pickFilter(req);
-    const where = buildLeadWhere(filter, 2);
+    const where = buildLeadWhere(filter, 2, req.ctx!.userId);
     const params = [ws, ...where.params];
 
     const sortCol = SORTABLE[String(req.query.sort || 'created_at')] || 'created_at';
@@ -75,22 +75,22 @@ leadsRouter.get(
     const ws = req.ctx!.workspaceId;
     const cities = await q(
       `select city as value, count(*)::int as count from leads
-        where workspace_id=$1 and coalesce(city,'') <> ''
+        where workspace_id=$1 and assigned_user_id=$2 and coalesce(city,'') <> ''
         group by city order by count desc limit 200`,
-      [ws],
+      [ws, req.ctx!.userId],
     );
     const states = await q(
       `select state as value, count(*)::int as count from leads
-        where workspace_id=$1 and coalesce(state,'') <> ''
+        where workspace_id=$1 and assigned_user_id=$2 and coalesce(state,'') <> ''
         group by state order by count desc limit 100`,
-      [ws],
+      [ws, req.ctx!.userId],
     );
     const totals = await one(
       `select count(*)::int as all_leads,
               count(*) filter (where status='new')::int as new_leads,
               count(*) filter (where last_called_at is null)::int as never_called
-         from leads where workspace_id=$1`,
-      [ws],
+         from leads where workspace_id=$1 and assigned_user_id=$2`,
+      [ws, req.ctx!.userId],
     );
     res.json({ cities, states, totals });
   }),
@@ -104,10 +104,10 @@ leadsRouter.get(
     const ws = req.ctx!.workspaceId;
     const rows = await q<any>(
       `select * from leads
-        where workspace_id=$1 and callback_at is not null
+        where workspace_id=$1 and assigned_user_id=$2 and callback_at is not null
         order by callback_at asc
         limit 500`,
-      [ws],
+      [ws, req.ctx!.userId],
     );
     const settings = await one<any>(
       `select enforce_compliance, call_window_start, call_window_end, call_window_days,
@@ -186,12 +186,17 @@ leadsRouter.post(
     if (!norms.size) return res.status(400).json({ error: 'None of those looked like phone numbers' });
 
     const list = [...norms];
+    // Staff may only touch their own leads; the admin sees the whole workspace.
+    const mine = req.ctx?.userId;
     const updated = await q<{ id: string }>(
-      `update leads
-          set outcome='do_not_call', status='disqualified', updated_at=now()
-        where workspace_id=$1 and phone_norm = any($2::text[])
-        returning id`,
-      [ws, list],
+      mine
+        ? `update leads set outcome='do_not_call', status='disqualified', updated_at=now()
+             where workspace_id=$1 and assigned_user_id=$3 and phone_norm = any($2::text[])
+             returning id`
+        : `update leads set outcome='do_not_call', status='disqualified', updated_at=now()
+             where workspace_id=$1 and phone_norm = any($2::text[])
+             returning id`,
+      mine ? [ws, list, mine] : [ws, list],
     );
 
     res.json({ received: numbers.length, valid: list.length, marked: updated.length });
@@ -203,8 +208,8 @@ leadsRouter.get(
   requireAuth,
   wrap(async (req, res) => {
     const row = await one(
-      `select * from leads where id=$1 and workspace_id=$2`,
-      [req.params.id, req.ctx!.workspaceId],
+      `select * from leads where id=$1 and workspace_id=$2 and assigned_user_id=$3`,
+      [req.params.id, req.ctx!.workspaceId, req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Lead not found' });
     const calls = await q(
@@ -229,8 +234,8 @@ leadsRouter.patch(
     const ws = req.ctx!.workspaceId;
     const b = req.body || {};
     const sets: string[] = [];
-    const params: any[] = [req.params.id, ws];
-    let i = 3;
+    const params: any[] = [req.params.id, ws, req.ctx!.userId];
+    let i = 4;
 
     for (const f of FIELDS) {
       if (!(f in b)) continue;
@@ -254,7 +259,7 @@ leadsRouter.patch(
 
     try {
       const row = await one(
-        `update leads set ${sets.join(', ')} where id=$1 and workspace_id=$2 returning *`,
+        `update leads set ${sets.join(', ')} where id=$1 and workspace_id=$2 and assigned_user_id=$3 returning *`,
         params,
       );
       if (!row) return res.status(404).json({ error: 'Lead not found' });
@@ -272,9 +277,10 @@ leadsRouter.delete(
   '/:id',
   requireAuth,
   wrap(async (req, res) => {
-    const r = await q(`delete from leads where id=$1 and workspace_id=$2 returning id`, [
+    const r = await q(`delete from leads where id=$1 and workspace_id=$2 and assigned_user_id=$3 returning id`, [
       req.params.id,
       req.ctx!.workspaceId,
+      req.ctx!.userId,
     ]);
     if (!r.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
@@ -285,6 +291,7 @@ leadsRouter.delete(
 leadsRouter.post(
   '/import',
   requireAuth,
+  requirePerm('canUploadLeads'),
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
     const records: any[] = Array.isArray(req.body?.records) ? req.body.records : [];
@@ -316,12 +323,12 @@ leadsRouter.post(
       for (let start = 0; start < valid.length; start += CHUNK) {
         const slice = valid.slice(start, start + CHUNK);
         const values: string[] = [];
-        const params: any[] = [ws];
-        let p = 2;
+        const params: any[] = [ws, req.ctx!.userId];
+        let p = 3;
 
         for (const { norm, rec } of slice) {
           values.push(
-            `($1, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`,
+            `($1, $2, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`,
           );
           params.push(
             String(rec.business_name || rec.name || rec.company || '').trim().slice(0, 300),
@@ -339,7 +346,7 @@ leadsRouter.post(
         }
 
         const result = await c.query(
-          `insert into leads (workspace_id, business_name, phone, phone_norm, address, city, state, zip,
+          `insert into leads (workspace_id, assigned_user_id, business_name, phone, phone_norm, address, city, state, zip,
                               website, email, notes, metadata)
            values ${values.join(',')}
            on conflict (workspace_id, phone_norm) do nothing

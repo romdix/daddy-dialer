@@ -5,9 +5,21 @@ import { requireAuth, wrap } from '../middleware';
 import { getProvider } from '../providers';
 import { baseUrl } from '../baseurl';
 import { ensureApiKey } from '../twiliokey';
+import { isAdminRequest } from '../adminauth';
+import { primaryWorkspaceId } from '../workspace';
 import type { ProviderId } from '../providers/types';
 
 export const settingsRouter = Router();
+
+/** The admin edits the shared workspace; staff read it. */
+async function resolveWorkspace(req: any): Promise<string | null> {
+  if (isAdminRequest(req)) return primaryWorkspaceId();
+  return req.ctx?.workspaceId || null;
+}
+
+const SETTINGS_LOCKED = {
+  error: 'Settings are managed by your administrator. You can change your microphone in the dialer.',
+};
 
 async function loadRow(workspaceId: string) {
   return one<any>(`select * from settings where workspace_id=$1`, [workspaceId]);
@@ -61,18 +73,19 @@ function publicView(s: any) {
 
 settingsRouter.get(
   '/',
-  requireAuth,
   wrap(async (req, res) => {
-    const s = await loadRow(req.ctx!.workspaceId);
+    const ws = await resolveWorkspace(req);
+    if (!ws) return res.status(401).json({ error: 'Not signed in' });
+    const s = await loadRow(ws);
     res.json(publicView(s));
   }),
 );
 
 settingsRouter.put(
   '/',
-  requireAuth,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    if (!isAdminRequest(req)) return res.status(403).json(SETTINGS_LOCKED);
+    const ws = await primaryWorkspaceId();
     const b = req.body || {};
     const current = await loadRow(ws);
 
@@ -205,9 +218,9 @@ settingsRouter.put(
 
 settingsRouter.post(
   '/resync',
-  requireAuth,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    if (!isAdminRequest(req)) return res.status(403).json(SETTINGS_LOCKED);
+    const ws = await primaryWorkspaceId();
     const s = await loadRow(ws);
     if (!s?.twilio_account_sid || !s?.twilio_auth_token) {
       return res.status(400).json({ error: 'Add your Twilio credentials first.' });
@@ -236,9 +249,9 @@ settingsRouter.post(
 
 settingsRouter.post(
   '/test',
-  requireAuth,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    if (!isAdminRequest(req)) return res.status(403).json(SETTINGS_LOCKED);
+    const ws = await primaryWorkspaceId();
     const s = await loadRow(ws);
 
     // Accept credentials straight from the form so "Test" works before saving.

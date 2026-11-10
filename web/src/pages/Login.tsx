@@ -6,12 +6,10 @@ import { BrandMark, useBrand } from '../lib/brand';
 
 export function Login() {
   const nav = useNavigate();
-  const { setMe, refresh } = useAuth();
+  const { refresh } = useAuth();
   const { brand } = useBrand();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -20,11 +18,7 @@ export function Login() {
     setErr(null);
     setBusy(true);
     try {
-      if (mode === 'signup') {
-        await api.post('/api/auth/signup', { email, password, fullName });
-      } else {
-        await api.post('/api/auth/login', { email, password });
-      }
+      await api.post('/api/auth/login', { email, password });
       await refresh();
       nav('/', { replace: true });
     } catch (e: any) {
@@ -46,18 +40,10 @@ export function Login() {
         </div>
 
         <div className="panel p-5">
-          <h2 className="text-sm font-semibold">{mode === 'login' ? 'Sign in' : 'Create your workspace'}</h2>
-          <p className="mt-1 text-xs text-muted">
-            {mode === 'login' ? 'Welcome back.' : 'One account, one workspace, ready in a second.'}
-          </p>
+          <h2 className="text-sm font-semibold">Sign in</h2>
+          <p className="mt-1 text-xs text-muted">Use the account your administrator gave you.</p>
 
           <form onSubmit={submit} className="mt-4 space-y-3">
-            {mode === 'signup' && (
-              <div>
-                <label className="label">Your name</label>
-                <input className="field" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Sam" />
-              </div>
-            )}
             <div>
               <label className="label">Email</label>
               <input
@@ -75,10 +61,10 @@ export function Login() {
               <input
                 className="field"
                 type="password"
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === 'signup' ? 'At least 8 characters' : '••••••••'}
+                placeholder="••••••••"
                 required
               />
             </div>
@@ -88,19 +74,13 @@ export function Login() {
             )}
 
             <button className="btn-primary w-full" disabled={busy}>
-              {busy ? 'Working…' : mode === 'login' ? 'Sign in' : 'Create account'}
+              {busy ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
 
-          <button
-            className="mt-3 text-xs text-muted hover:text-accent"
-            onClick={() => {
-              setMode(mode === 'login' ? 'signup' : 'login');
-              setErr(null);
-            }}
-          >
-            {mode === 'login' ? 'No account? Create one' : 'Already have an account? Sign in'}
-          </button>
+          <p className="mt-3 text-2xs text-muted">
+            No account? Ask your administrator — accounts are created for you.
+          </p>
         </div>
 
         <p className="mt-4 text-center text-2xs text-muted">

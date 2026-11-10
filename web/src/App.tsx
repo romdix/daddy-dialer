@@ -9,6 +9,7 @@ import { Callbacks } from './pages/Callbacks';
 import { SessionDialer } from './pages/SessionDialer';
 import { CallLog } from './pages/CallLog';
 import { Settings } from './pages/Settings';
+import { Admin } from './pages/Admin';
 
 function Splash() {
   return (
@@ -40,6 +41,7 @@ function OnlyLoggedOut({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <Routes>
+      <Route path="/admin" element={<Admin />} />
       <Route
         path="/login"
         element={

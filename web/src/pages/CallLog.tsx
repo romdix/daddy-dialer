@@ -4,6 +4,7 @@ import { api, qs } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { Badge, EmptyState, Pager } from '../components/ui';
 import { OUTCOMES, OUTCOME_LABEL, fmtDateTime, fmtDuration, outcomeColor } from '../lib/format';
+import { useAuth } from '../lib/auth';
 
 interface CallRow {
   id: string;
@@ -58,6 +59,7 @@ function CallNotes({ call }: { call: CallRow }) {
 
 export function CallLog() {
   const qc = useQueryClient();
+  const { me } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [outcome, setOutcome] = useState('all');
@@ -153,8 +155,19 @@ export function CallLog() {
                           <div className="grid gap-4 py-2 md:grid-cols-2">
                             <div>
                               <p className="mb-1 text-2xs uppercase tracking-wider text-muted">Recording</p>
-                              {c.recording_sid ? (
-                                <audio controls preload="none" className="w-full" src={`/api/calls/${c.id}/recording`} />
+                              {!(me?.user as any)?.canHearRecordings ? (
+                                <p className="text-xs text-muted">
+                                  Your account is not allowed to listen to recordings.
+                                </p>
+                              ) : c.recording_sid ? (
+                                <audio
+                                  controls
+                                  controlsList="nodownload noplaybackrate"
+                                  onContextMenu={(e) => e.preventDefault()}
+                                  preload="none"
+                                  className="w-full"
+                                  src={`/api/calls/${c.id}/recording`}
+                                />
                               ) : (
                                 <p className="text-xs text-muted">No recording for this call.</p>
                               )}

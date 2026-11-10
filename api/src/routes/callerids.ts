@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { q, one } from '../db';
-import { requireAuth, wrap } from '../middleware';
+import { requireWorkspace, wrap } from '../middleware';
 import { dec } from '../crypto';
 import { normalizePhone, toE164 } from '../filters';
 import { baseUrl } from '../baseurl';
@@ -17,17 +17,17 @@ const list = (ws: string) =>
 
 callerIdsRouter.get(
   '/',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    res.json({ rows: await list(req.ctx!.workspaceId) });
+    res.json({ rows: await list((req as any).ws) });
   }),
 );
 
 callerIdsRouter.post(
   '/',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    const ws = (req as any).ws;
     const norm = normalizePhone(String(req.body?.number || ''));
     if (!norm) return res.status(400).json({ error: 'That phone number does not look valid' });
     const label = String(req.body?.label || '').trim().slice(0, 60) || null;
@@ -43,9 +43,9 @@ callerIdsRouter.post(
 
 callerIdsRouter.patch(
   '/:id',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    const ws = (req as any).ws;
     const sets: string[] = [];
     const params: any[] = [req.params.id, ws];
     let i = 3;
@@ -69,9 +69,9 @@ callerIdsRouter.patch(
 
 callerIdsRouter.delete(
   '/:id',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    await q(`delete from caller_ids where id=$1 and workspace_id=$2`, [req.params.id, req.ctx!.workspaceId]);
+    await q(`delete from caller_ids where id=$1 and workspace_id=$2`, [req.params.id, (req as any).ws]);
     res.json({ ok: true });
   }),
 );
@@ -79,9 +79,9 @@ callerIdsRouter.delete(
 /** Import every voice-capable number already on the Twilio account. */
 callerIdsRouter.post(
   '/sync',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    const ws = (req as any).ws;
     const s = await one<any>(`select * from settings where workspace_id=$1`, [ws]);
     if (!s?.twilio_account_sid || !s?.twilio_auth_token) {
       return res.status(400).json({ error: 'Add your Twilio credentials first.' });
@@ -108,9 +108,9 @@ callerIdsRouter.post(
 /** Route a number's incoming calls to the browser. */
 callerIdsRouter.post(
   '/:id/inbound',
-  requireAuth,
+  requireWorkspace,
   wrap(async (req, res) => {
-    const ws = req.ctx!.workspaceId;
+    const ws = (req as any).ws;
     const row = await one<any>(`select * from caller_ids where id=$1 and workspace_id=$2`, [req.params.id, ws]);
     if (!row) return res.status(404).json({ error: 'Not found' });
 

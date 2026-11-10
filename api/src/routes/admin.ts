@@ -1,0 +1,442 @@
+import { Router } from 'express';
+import bcrypt from 'bcryptjs';
+import { one, q, tx } from '../db';
+import { wrap } from '../middleware';
+import {
+  adminConfigured,
+  checkAdminCredentials,
+  clearAdminCookie,
+  issueAdminCookie,
+  isAdminRequest,
+  requireAdmin,
+} from '../adminauth';
+import { primaryWorkspaceId } from '../workspace';
+import { normalizePhone, formatPhone, toE164 } from '../filters';
+import { OUTCOMES, STATUSES } from '../config';
+import { getProvider } from '../providers';
+
+export const adminRouter = Router();
+
+/* ------------------------------------------------------------------ *
+ * Session
+ * ------------------------------------------------------------------ */
+
+adminRouter.get('/session', (req, res) => {
+  res.json({ configured: adminConfigured(), signedIn: isAdminRequest(req) });
+});
+
+adminRouter.post(
+  '/login',
+  wrap(async (req, res) => {
+    if (!adminConfigured()) {
+      return res.status(503).json({
+        error: 'Admin login is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD on the server.',
+      });
+    }
+    if (!checkAdminCredentials(String(req.body?.username || ''), String(req.body?.password || ''))) {
+      return res.status(401).json({ error: 'Wrong username or password' });
+    }
+    issueAdminCookie(res);
+    res.json({ ok: true });
+  }),
+);
+
+adminRouter.post('/logout', (_req, res) => {
+  clearAdminCookie(res);
+  res.json({ ok: true });
+});
+
+adminRouter.use(requireAdmin);
+
+/* ------------------------------------------------------------------ *
+ * Users
+ * ------------------------------------------------------------------ */
+
+const userColumns = `u.id, u.email, u.full_name as "fullName", u.is_active as "isActive",
+  u.can_upload_leads as "canUploadLeads", u.can_hear_recordings as "canHearRecordings",
+  u.caller_id as "callerId", u.parallel_lines as "parallelLines", u.created_at as "createdAt"`;
+
+const userStats = `(select count(*) from leads l where l.assigned_user_id = u.id)::int as "leadsAssigned",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('day', now()))::int as "callsToday",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('week', now()))::int as "callsWeek",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('month', now()))::int as "callsMonth",
+  (select count(*) from call_logs c where c.user_id = u.id and c.called_at >= date_trunc('month', now())
+     and c.outcome in ('connected_dm','connected_gk','connected_other','appointment_set'))::int as "connectsMonth",
+  (select max(called_at) from call_logs c where c.user_id = u.id) as "lastCallAt"`;
+
+adminRouter.get(
+  '/overview',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const users = await q(
+      `select ${userColumns}, ${userStats} from users u order by u.created_at asc`,
+    );
+    const totals = await one<any>(
+      `select
+         (select count(*) from leads where workspace_id=$1)::int as leads,
+         (select count(*) from leads where workspace_id=$1 and assigned_user_id is null)::int as unassigned,
+         (select count(*) from call_logs where workspace_id=$1 and called_at >= date_trunc('day', now()))::int as calls_today,
+         (select count(*) from call_logs where workspace_id=$1 and called_at >= date_trunc('month', now()))::int as calls_month
+       `,
+      [ws],
+    );
+    res.json({ users, totals });
+  }),
+);
+
+adminRouter.get(
+  '/users',
+  wrap(async (_req, res) => {
+    const rows = await q(`select ${userColumns}, ${userStats} from users u order by u.created_at asc`);
+    res.json({ rows });
+  }),
+);
+
+adminRouter.post(
+  '/users',
+  wrap(async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const fullName = String(req.body?.fullName || '').trim() || null;
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+    const exists = await one(`select id from users where lower(email)=lower($1)`, [email]);
+    if (exists) return res.status(409).json({ error: 'A user with that email already exists' });
+
+    const ws = await primaryWorkspaceId();
+    const hash = await bcrypt.hash(password, 10);
+    const b = req.body || {};
+
+    const id = await tx(async (c) => {
+      const u = await c.query(
+        `insert into users (email, password_hash, full_name, can_upload_leads, can_hear_recordings, caller_id, parallel_lines)
+         values ($1,$2,$3,$4,$5,$6,$7) returning id`,
+        [
+          email,
+          hash,
+          fullName,
+          Boolean(b.canUploadLeads),
+          Boolean(b.canHearRecordings),
+          b.callerId || null,
+          Math.max(1, Math.min(3, Number(b.parallelLines || 1))),
+        ],
+      );
+      const uid = u.rows[0].id as string;
+      await c.query(`insert into workspace_members (workspace_id, user_id, role) values ($1,$2,'member')`, [ws, uid]);
+      return uid;
+    });
+
+    const row = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [id]);
+    res.json(row);
+  }),
+);
+
+adminRouter.get(
+  '/users/:id',
+  wrap(async (req, res) => {
+    const row = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'User not found' });
+
+    const recentLeads = await q(
+      `select id, business_name, phone, city, state, status, outcome, last_called_at
+         from leads where assigned_user_id=$1 order by created_at desc limit 10`,
+      [req.params.id],
+    );
+    res.json({ user: row, recentLeads });
+  }),
+);
+
+adminRouter.patch(
+  '/users/:id',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const sets: string[] = [];
+    const params: any[] = [req.params.id];
+    let i = 2;
+
+    const push = (col: string, v: any) => {
+      sets.push(`${col}=$${i++}`);
+      params.push(v);
+    };
+
+    if (typeof b.fullName === 'string') push('full_name', b.fullName.trim() || null);
+    if (typeof b.isActive === 'boolean') push('is_active', b.isActive);
+    if (typeof b.canUploadLeads === 'boolean') push('can_upload_leads', b.canUploadLeads);
+    if (typeof b.canHearRecordings === 'boolean') push('can_hear_recordings', b.canHearRecordings);
+    if (typeof b.callerId === 'string') push('caller_id', b.callerId.trim() || null);
+    if (b.parallelLines !== undefined) push('parallel_lines', Math.max(1, Math.min(3, Number(b.parallelLines) || 1)));
+    if (typeof b.password === 'string' && b.password.length >= 8) {
+      push('password_hash', await bcrypt.hash(b.password, 10));
+      // Force a fresh login everywhere.
+      await q(`delete from auth_sessions where user_id=$1`, [req.params.id]);
+    }
+    if (typeof b.password === 'string' && b.password.length > 0 && b.password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to change' });
+    sets.push('updated_at=now()');
+
+    const row = await one(
+      `update users set ${sets.join(', ')} where id=$1 returning id`,
+      params,
+    );
+    if (!row) return res.status(404).json({ error: 'User not found' });
+
+    const fresh = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [req.params.id]);
+    res.json(fresh);
+  }),
+);
+
+adminRouter.delete(
+  '/users/:id',
+  wrap(async (req, res) => {
+    const r = await q(`delete from users where id=$1 returning id`, [req.params.id]);
+    if (!r.length) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true });
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ * Leads
+ * ------------------------------------------------------------------ */
+
+adminRouter.get(
+  '/leads',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const search = String(req.query.search || '').trim();
+    const assigned = String(req.query.assigned || 'all');
+
+    const params: any[] = [ws];
+    const parts: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      parts.push(`(l.business_name ilike $${params.length} or l.phone ilike $${params.length} or coalesce(l.city,'') ilike $${params.length})`);
+    }
+    if (assigned === 'unassigned') parts.push(`l.assigned_user_id is null`);
+    else if (assigned !== 'all') {
+      params.push(assigned);
+      parts.push(`l.assigned_user_id = $${params.length}`);
+    }
+
+    const where = parts.length ? `and ${parts.join(' and ')}` : '';
+    const rows = await q(
+      `select l.*, u.email as assigned_email, count(*) over() as total
+         from leads l
+         left join users u on u.id = l.assigned_user_id
+        where l.workspace_id=$1 ${where}
+        order by l.created_at desc
+        limit ${limit} offset ${offset}`,
+      params,
+    );
+    const total = rows.length ? Number((rows[0] as any).total) : 0;
+    res.json({ rows: rows.map(({ total: _t, ...r }: any) => r), total, page, pages: Math.ceil(total / limit) || 1 });
+  }),
+);
+
+adminRouter.post(
+  '/leads/assign',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const ids: string[] = Array.isArray(req.body?.leadIds) ? req.body.leadIds : [];
+    const userId = req.body?.userId ? String(req.body.userId) : null;
+    if (!ids.length) return res.status(400).json({ error: 'Pick at least one lead' });
+    if (userId) {
+      const u = await one(`select id from users where id=$1`, [userId]);
+      if (!u) return res.status(404).json({ error: 'User not found' });
+    }
+    const out = await q(
+      `update leads set assigned_user_id=$3, updated_at=now()
+        where workspace_id=$1 and id = any($2::uuid[]) returning id`,
+      [ws, ids, userId],
+    );
+    res.json({ assigned: out.length, userId });
+  }),
+);
+
+adminRouter.post(
+  '/leads/import',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const records: any[] = Array.isArray(req.body?.records) ? req.body.records : [];
+    const assignTo = req.body?.userId ? String(req.body.userId) : null;
+    if (!records.length) return res.status(400).json({ error: 'No rows to import' });
+    if (records.length > 5000) return res.status(400).json({ error: 'Send at most 5,000 rows per batch' });
+
+    let created = 0;
+    let duplicates = 0;
+    let invalid = 0;
+    const seen = new Set<string>();
+    const valid: { norm: string; rec: any }[] = [];
+
+    for (const r of records) {
+      const norm = normalizePhone(r.phone ?? r.phone_number ?? '');
+      if (!norm) {
+        invalid++;
+        continue;
+      }
+      if (seen.has(norm)) {
+        duplicates++;
+        continue;
+      }
+      seen.add(norm);
+      valid.push({ norm, rec: r });
+    }
+
+    await tx(async (c) => {
+      const CHUNK = 400;
+      for (let start = 0; start < valid.length; start += CHUNK) {
+        const slice = valid.slice(start, start + CHUNK);
+        const values: string[] = [];
+        const params: any[] = [ws, assignTo];
+        let p = 3;
+        for (const { norm, rec } of slice) {
+          values.push(
+            `($1, $2, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`,
+          );
+          params.push(
+            String(rec.business_name || rec.name || rec.company || '').trim().slice(0, 300),
+            formatPhone(norm),
+            norm,
+            rec.address || null,
+            rec.city || null,
+            rec.state || null,
+            rec.zip || rec.postal_code || null,
+            rec.website || null,
+            rec.email || null,
+            rec.notes || null,
+            JSON.stringify(rec.metadata || {}),
+          );
+        }
+        const result = await c.query(
+          `insert into leads (workspace_id, assigned_user_id, business_name, phone, phone_norm, address, city, state, zip,
+                              website, email, notes, metadata)
+           values ${values.join(',')}
+           on conflict (workspace_id, phone_norm) do nothing
+           returning id`,
+          params,
+        );
+        created += result.rowCount || 0;
+      }
+    });
+
+    duplicates += valid.length - created;
+    res.json({ created, duplicates, invalid, received: records.length });
+  }),
+);
+
+adminRouter.patch(
+  '/leads/:id',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const b = req.body || {};
+    const sets: string[] = [];
+    const params: any[] = [req.params.id, ws];
+    let i = 3;
+
+    const push = (col: string, v: any) => {
+      sets.push(`${col}=$${i++}`);
+      params.push(v);
+    };
+
+    for (const f of ['business_name', 'address', 'city', 'state', 'zip', 'website', 'email', 'notes']) {
+      if (f in b) push(f, b[f] === '' ? null : b[f]);
+    }
+    if ('status' in b) {
+      if (!STATUSES.includes(b.status)) return res.status(400).json({ error: 'Unknown status' });
+      push('status', b.status);
+    }
+    if ('outcome' in b) {
+      if (b.outcome && !OUTCOMES.includes(b.outcome)) return res.status(400).json({ error: 'Unknown outcome' });
+      push('outcome', b.outcome || null);
+    }
+    if ('assigned_user_id' in b) push('assigned_user_id', b.assigned_user_id || null);
+    if ('phone' in b) {
+      const norm = normalizePhone(String(b.phone || ''));
+      if (!norm) return res.status(400).json({ error: 'That phone number does not look valid' });
+      push('phone', formatPhone(norm));
+      push('phone_norm', norm);
+    }
+
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    sets.push('updated_at=now()');
+
+    try {
+      const row = await one(`update leads set ${sets.join(', ')} where id=$1 and workspace_id=$2 returning *`, params);
+      if (!row) return res.status(404).json({ error: 'Lead not found' });
+      res.json(row);
+    } catch (e: any) {
+      if (String(e?.message || '').includes('leads_unique_phone')) {
+        return res.status(409).json({ error: 'Another lead already has that phone number' });
+      }
+      throw e;
+    }
+  }),
+);
+
+adminRouter.delete(
+  '/leads/:id',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const r = await q(`delete from leads where id=$1 and workspace_id=$2 returning id`, [req.params.id, ws]);
+    if (!r.length) return res.status(404).json({ error: 'Lead not found' });
+    res.json({ ok: true });
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ * Call history
+ * ------------------------------------------------------------------ */
+
+adminRouter.get(
+  '/calls',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    const params: any[] = [ws];
+    const parts: string[] = [];
+    if (req.query.userId) {
+      params.push(String(req.query.userId));
+      parts.push(`c.user_id = $${params.length}`);
+    }
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      params.push(`%${search}%`);
+      parts.push(`(coalesce(l.business_name,'') ilike $${params.length} or coalesce(c.to_number,'') ilike $${params.length})`);
+    }
+    const where = parts.length ? `and ${parts.join(' and ')}` : '';
+
+    const rows = await q(
+      `select c.*, l.business_name, u.email as user_email, count(*) over() as total
+         from call_logs c
+         left join leads l on l.id = c.lead_id
+         left join users u on u.id = c.user_id
+        where c.workspace_id=$1 ${where}
+        order by c.called_at desc
+        limit ${limit} offset ${offset}`,
+      params,
+    );
+    const total = rows.length ? Number((rows[0] as any).total) : 0;
+    res.json({ rows: rows.map(({ total: _t, ...r }: any) => r), total, page, pages: Math.ceil(total / limit) || 1 });
+  }),
+);
+
+/** Numbers the admin can hand out as caller IDs, for the per-user setting. */
+adminRouter.get(
+  '/caller-ids',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const rows = await q(`select number, label, active from caller_ids where workspace_id=$1 order by created_at asc`, [ws]);
+    res.json({ rows });
+  }),
+);

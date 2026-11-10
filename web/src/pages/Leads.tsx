@@ -6,6 +6,7 @@ import { Badge, EmptyState, Modal, Pager } from '../components/ui';
 import { ImportDialog } from './ImportDialog';
 import { OUTCOMES, OUTCOME_LABEL, STATUS_LABEL, fmtWhen, outcomeColor } from '../lib/format';
 import { useDialer } from '../lib/dialer';
+import { useAuth } from '../lib/auth';
 
 interface Lead {
   id: string;
@@ -40,6 +41,7 @@ const PRESET_KEY = 'dd.presets';
 export function Leads() {
   const qc = useQueryClient();
   const dialer = useDialer();
+  const { me } = useAuth();
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [searchInput, setSearchInput] = useState('');
   const [page, setPage] = useState(1);
@@ -123,9 +125,11 @@ export function Leads() {
         <button className="btn-ghost !py-1.5 text-xs" onClick={savePreset}>
           Save filter
         </button>
-        <button className="btn-primary !py-1.5 text-xs" onClick={() => setImportOpen(true)}>
-          Import CSV
-        </button>
+        {(me?.user as any)?.canUploadLeads && (
+          <button className="btn-primary !py-1.5 text-xs" onClick={() => setImportOpen(true)}>
+            Import CSV
+          </button>
+        )}
       </PageHeader>
 
       <div className="border-b border-ink-800 bg-ink-900/40 px-6 py-2.5">

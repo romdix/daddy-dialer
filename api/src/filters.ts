@@ -10,10 +10,16 @@ export interface LeadFilter {
   neverCalled?: boolean;
 }
 
-export function buildLeadWhere(f: LeadFilter, startIndex = 2): { sql: string; params: any[] } {
+export function buildLeadWhere(f: LeadFilter, startIndex = 2, assignedTo?: string | null): { sql: string; params: any[] } {
   const params: any[] = []; // $1 is workspace id
   const parts: string[] = [];
   let i = startIndex;
+
+  // Staff only ever see the leads the admin gave them.
+  if (assignedTo) {
+    parts.push(`assigned_user_id = $${i++}`);
+    params.push(assignedTo);
+  }
 
   if (f.search?.trim()) {
     parts.push(

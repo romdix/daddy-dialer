@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'node:fs';
 import { q, one } from '../db';
-import { requireAuth, wrap } from '../middleware';
+import { requireAuth, requirePerm, wrap } from '../middleware';
 import { OUTCOMES } from '../config';
 import { dec } from '../crypto';
 
@@ -18,8 +18,8 @@ callsRouter.get(
     const search = String(req.query.search || '').trim();
     const outcome = String(req.query.outcome || '');
 
-    const params: any[] = [ws];
-    const parts: string[] = [];
+    const params: any[] = [ws, req.ctx!.userId];
+    const parts: string[] = ['c.user_id = $2'];
     if (search) {
       params.push(`%${search}%`);
       parts.push(`(coalesce(l.business_name,'') ilike $${params.length} or coalesce(c.to_number,'') ilike $${params.length})`);
@@ -32,7 +32,6 @@ callsRouter.get(
       }
     }
     const where = parts.length ? `and ${parts.join(' and ')}` : '';
-
     const rows = await q(
       `select c.*, l.business_name, s.name as session_name, count(*) over() as total
          from call_logs c
@@ -63,10 +62,10 @@ callsRouter.get(
          from call_logs c
          left join leads l on l.id = c.lead_id
          left join calling_sessions s on s.id = c.session_id
-        where c.workspace_id=$1
+        where c.workspace_id=$1 and c.user_id=$2
         order by c.called_at desc
         limit 100000`,
-      [ws],
+      [ws, req.ctx!.userId],
     );
 
     const head = ['called_at', 'direction', 'from', 'to', 'business', 'outcome', 'status', 'duration_sec', 'answered_by', 'session', 'notes'];
@@ -98,8 +97,8 @@ callsRouter.get(
          from call_logs c
          left join leads l on l.id = c.lead_id
          left join calling_sessions s on s.id = c.session_id
-        where c.id=$1 and c.workspace_id=$2`,
-      [req.params.id, req.ctx!.workspaceId],
+        where c.id=$1 and c.workspace_id=$2 and c.user_id=$3`,
+      [req.params.id, req.ctx!.workspaceId, req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Call not found' });
     res.json(row);
@@ -117,8 +116,8 @@ callsRouter.patch(
       return res.status(400).json({ error: 'notes must be text' });
     }
     const row = await one(
-      `update call_logs set notes=$3 where id=$1 and workspace_id=$2 returning *`,
-      [req.params.id, ws, (notes ?? '').trim() || null],
+      `update call_logs set notes=$3 where id=$1 and workspace_id=$2 and user_id=$4 returning *`,
+      [req.params.id, ws, (notes ?? '').trim() || null, req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Call not found' });
     res.json(row);
@@ -135,8 +134,8 @@ callsRouter.patch(
     if (!OUTCOMES.includes(outcome as any)) return res.status(400).json({ error: 'Unknown outcome' });
 
     const row = await one(
-      `update call_logs set outcome=$3 where id=$1 and workspace_id=$2 returning *`,
-      [req.params.id, ws, outcome],
+      `update call_logs set outcome=$3 where id=$1 and workspace_id=$2 and user_id=$4 returning *`,
+      [req.params.id, ws, outcome, req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Call not found' });
 
@@ -170,11 +169,13 @@ callsRouter.patch(
 callsRouter.get(
   '/:id/recording',
   requireAuth,
+  requirePerm('canHearRecordings'),
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
-    const call = await one<any>(`select * from call_logs where id=$1 and workspace_id=$2`, [
+    const call = await one<any>(`select * from call_logs where id=$1 and workspace_id=$2 and user_id=$3`, [
       req.params.id,
       ws,
+      req.ctx!.userId,
     ]);
     if (!call?.recording_sid && !call?.recording_path) return res.status(404).json({ error: 'No recording for this call' });
 
