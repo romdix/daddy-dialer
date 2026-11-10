@@ -45,6 +45,8 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
   const suffix = asUserId ? `userId=${asUserId}` : '';
   const withUser = (path: string) => (asUserId ? `${path}${path.includes('?') ? '&' : '?'}${suffix}` : path);
   const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [searchInput, setSearchInput] = useState('');
   const [page, setPage] = useState(1);
@@ -118,6 +120,34 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
     qc.invalidateQueries({ queryKey: ['leads'] });
     qc.invalidateQueries({ queryKey: ['lead-facets'] });
   };
+
+  const bulkDelete = async (ids: string[]) => {
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected lead${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    const r = await api.post<{ deleted: number }>('/api/admin/leads/bulk-delete', { leadIds: ids });
+    setSelected([]);
+    qc.invalidateQueries({ queryKey: ['leads'] });
+    qc.invalidateQueries({ queryKey: ['lead-facets'] });
+    setNotice(`Deleted ${r.deleted} leads`);
+  };
+
+  const deleteAll = async () => {
+    if (!asUserId) return;
+    const count = query.data?.total ?? 0;
+    if (!confirm(`Delete all ${count} leads assigned to this person? This cannot be undone.`)) return;
+    const r = await api.post<{ deleted: number }>(`/api/admin/users/${asUserId}/leads/delete-all`, {});
+    setSelected([]);
+    qc.invalidateQueries({ queryKey: ['leads'] });
+    qc.invalidateQueries({ queryKey: ['lead-facets'] });
+    setNotice(`Deleted ${r.deleted} leads`);
+  };
+
+  useEffect(() => {
+    setSelected([]);
+  }, [page, filters]);
+
+  const rows = query.data?.rows || [];
+  const allOnPage = rows.length > 0 && rows.every((r) => selected.includes(r.id));
 
   return (
     <div>
@@ -257,12 +287,43 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
         </div>
       </div>
 
+      {adminMode && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-ink-800 bg-ink-900/60 px-6 py-2 text-xs">
+          <label className="flex items-center gap-2 text-muted">
+            <input
+              type="checkbox"
+              className="accent-check"
+              checked={allOnPage}
+              onChange={(e) => setSelected(e.target.checked ? rows.map((r) => r.id) : [])}
+            />
+            select page
+          </label>
+          <span className="text-muted">{selected.length} selected</span>
+          <button
+            className="btn-ghost !py-1 text-2xs !text-red-300"
+            disabled={!selected.length}
+            onClick={() => bulkDelete(selected)}
+          >
+            Delete selected
+          </button>
+          <button
+            className="btn-ghost !py-1 text-2xs !text-red-300"
+            disabled={!query.data?.total}
+            onClick={deleteAll}
+          >
+            Delete all {query.data?.total ?? 0}
+          </button>
+          {notice && <span className="text-accent">{notice}</span>}
+        </div>
+      )}
+
       <div className="p-4">
         <div className="panel overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-ink-900">
                 <tr>
+                  {adminMode && <th className="th w-8"></th>}
                   <th className="th">Business</th>
                   <th className="th">Phone</th>
                   <th className="th">City</th>
@@ -275,6 +336,18 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
               <tbody>
                 {(query.data?.rows || []).map((l) => (
                   <tr key={l.id} className="hover:bg-ink-800/40 cursor-pointer" onClick={() => setEditing(l)}>
+                    {adminMode && (
+                      <td className="td" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="accent-check"
+                          checked={selected.includes(l.id)}
+                          onChange={(e) =>
+                            setSelected(e.target.checked ? [...selected, l.id] : selected.filter((id) => id !== l.id))
+                          }
+                        />
+                      </td>
+                    )}
                     <td className="td max-w-[260px] truncate">{l.business_name || <span className="text-zinc-600">Unnamed</span>}</td>
                     <td className="td mono text-zinc-300">{l.phone}</td>
                     <td className="td text-zinc-400">

@@ -329,6 +329,29 @@ adminRouter.get(
 );
 
 adminRouter.post(
+  '/leads/bulk-delete',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const ids = Array.isArray(req.body?.leadIds) ? req.body.leadIds.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ error: 'No leads selected' });
+    const out = await q(`delete from leads where workspace_id=$1 and id = any($2::uuid[]) returning id`, [ws, ids]);
+    res.json({ deleted: out.length });
+  }),
+);
+
+adminRouter.post(
+  '/users/:id/leads/delete-all',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const out = await q(`delete from leads where workspace_id=$1 and assigned_user_id=$2 returning id`, [
+      ws,
+      req.params.id,
+    ]);
+    res.json({ deleted: out.length });
+  }),
+);
+
+adminRouter.post(
   '/leads/assign',
   wrap(async (req, res) => {
     const ws = await primaryWorkspaceId();
