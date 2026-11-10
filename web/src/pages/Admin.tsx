@@ -1232,11 +1232,16 @@ function Calls() {
 
 function AdminSettings() {
   const [s, setS] = useState<any>(null);
+  const [wsName, setWsName] = useState('');
+  const [wsSaved, setWsSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     j('/api/settings').then(setS).catch(() => setS(null));
+    j('/api/admin/workspace')
+      .then((w) => setWsName(w?.name || ''))
+      .catch(() => {});
   }, []);
 
   if (!s) return <Splash />;
@@ -1294,6 +1299,46 @@ function AdminSettings() {
       ))}
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <div className="panel p-4 lg:col-span-2">
+          <h2 className="text-sm font-semibold">Workspace</h2>
+          <p className="mt-0.5 text-2xs text-muted">
+            Every staff account shares this one workspace. The name appears under your account in the dialer sidebar.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              className="field max-w-sm"
+              value={wsName}
+              onChange={(e) => {
+                setWsName(e.target.value);
+                setWsSaved(null);
+              }}
+              placeholder="Business name"
+            />
+            <button
+              className="btn-ghost !py-2 text-xs"
+              disabled={!wsName.trim() || busy}
+              onClick={async () => {
+                setBusy(true);
+                setWsSaved(null);
+                try {
+                  const r = await j('/api/admin/workspace', {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: wsName.trim() }),
+                  });
+                  setWsSaved(`Saved — now shows "${r.name}"`);
+                } catch (e: any) {
+                  setWsSaved(e?.message || 'Could not save');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Save name
+            </button>
+            {wsSaved && <span className="text-2xs text-accent">{wsSaved}</span>}
+          </div>
+        </div>
+
         <div className="panel p-4">
           <h2 className="text-sm font-semibold">Twilio</h2>
           <div className="mt-3 space-y-3">

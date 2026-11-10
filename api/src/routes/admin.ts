@@ -97,6 +97,27 @@ adminRouter.get(
 );
 
 adminRouter.get(
+  '/workspace',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const row = await one(`select id, name from workspaces where id=$1`, [ws]);
+    res.json(row);
+  }),
+);
+
+adminRouter.put(
+  '/workspace',
+  wrap(async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (name.length > 60) return res.status(400).json({ error: 'Keep the name under 60 characters' });
+    const ws = await primaryWorkspaceId();
+    await q(`update workspaces set name=$2 where id=$1`, [ws, name]);
+    res.json({ id: ws, name });
+  }),
+);
+
+adminRouter.get(
   '/users',
   wrap(async (req, res) => {
     const withDeleted = req.query.includeDeleted === '1';

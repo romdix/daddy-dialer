@@ -21,11 +21,11 @@ sessionsRouter.get(
               count(sl.id) filter (where sl.status='pending')::int as remaining
          from calling_sessions s
          left join session_leads sl on sl.session_id = s.id
-        where s.workspace_id = $1
+        where s.workspace_id = $1 and s.owner_user_id = $2
         group by s.id
         order by s.created_at desc
         limit 200`,
-      [ws],
+      [ws, req.ctx!.userId],
     );
     res.json({ rows });
   }),
@@ -36,10 +36,10 @@ sessionsRouter.get(
   requireAuth,
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
-    const session = await one(`select * from calling_sessions where id=$1 and workspace_id=$2`, [
-      req.params.id,
-      ws,
-    ]);
+    const session = await one(
+      `select * from calling_sessions where id=$1 and workspace_id=$2 and owner_user_id=$3`,
+      [req.params.id, ws, req.ctx!.userId],
+    );
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     const leads = await q(
@@ -124,8 +124,8 @@ sessionsRouter.patch(
       `update calling_sessions set status=$3,
               started_at = case when $3='active' and started_at is null then now() else started_at end,
               completed_at = case when $3='completed' then now() else completed_at end
-        where id=$1 and workspace_id=$2 returning *`,
-      [req.params.id, ws, status],
+        where id=$1 and workspace_id=$2 and owner_user_id=$4 returning *`,
+      [req.params.id, ws, status, req.ctx!.userId],
     );
     if (!row) return res.status(404).json({ error: 'Session not found' });
     res.json(row);
@@ -136,7 +136,10 @@ sessionsRouter.delete(
   '/:id',
   requireAuth,
   wrap(async (req, res) => {
-    await q(`delete from calling_sessions where id=$1 and workspace_id=$2`, [req.params.id, req.ctx!.workspaceId]);
+    await q(
+      `delete from calling_sessions where id=$1 and workspace_id=$2 and owner_user_id=$3`,
+      [req.params.id, req.ctx!.workspaceId, req.ctx!.userId],
+    );
     res.json({ ok: true });
   }),
 );
