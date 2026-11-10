@@ -291,7 +291,10 @@ leadsRouter.patch(
     const ws = req.ctx!.workspaceId;
     const b = req.body || {};
     const sets: string[] = [];
-    const params: any[] = [req.params.id, ws, req.ctx!.userId];
+    // The admin editing a rep's list can still touch a lead that has just been
+    // moved away; staff are limited to leads they own.
+    const ownerParam = (req as any).isAdminAsUser ? null : req.ctx!.userId;
+    const params: any[] = [req.params.id, ws, ownerParam];
     let i = 4;
 
     for (const f of FIELDS) {
@@ -321,7 +324,9 @@ leadsRouter.patch(
 
     try {
       const row = await one(
-        `update leads set ${sets.join(', ')} where id=$1 and workspace_id=$2 and assigned_user_id=$3 returning *`,
+        `update leads set ${sets.join(', ')}
+          where id=$1 and workspace_id=$2 and ($3::uuid is null or assigned_user_id=$3)
+          returning *`,
         params,
       );
       if (!row) return res.status(404).json({ error: 'Lead not found' });

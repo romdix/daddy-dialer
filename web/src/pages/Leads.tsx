@@ -441,7 +441,6 @@ function LeadEditor({
               value={form.assigned_user_id || ''}
               onChange={(e) => set('assigned_user_id', e.target.value || null)}
             >
-              <option value="">— unassigned —</option>
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
                   {(a.fullName ? `${a.fullName} — ${a.email}` : a.email) + (a.deletedAt ? ' (deleted)' : '')}
