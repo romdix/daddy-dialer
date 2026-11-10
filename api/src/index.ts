@@ -1,8 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
-import path from 'node:path';
-import { config } from './config';
+import path from 'node:path';import { config } from './config';
 import { migrate, pool, seedBrandFromEnv } from './db';
 import { attachUser } from './middleware';
 import { purgeTwilioRecordings } from './recordings';
@@ -61,9 +60,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 async function main() {
   await migrate();
   await seedBrandFromEnv();
+
+  // Prove the recordings volume is actually writable — a silent failure here
+  // would mean paying Twilio to store calls we think we own.
+  try {
+    fs.mkdirSync(config.recordingsDir, { recursive: true });
+    const probe = path.join(config.recordingsDir, '.write-probe');
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    console.log(`[api] recordings directory ready: ${config.recordingsDir}`);
+  } catch (e: any) {
+    console.error(`[api] recordings directory NOT writable (${config.recordingsDir}): ${e?.message}`);
+  }
+
   app.listen(config.port, () => {
     console.log(`[api] listening on :${config.port} (canonical url ${config.publicUrl || 'from request host'})`);
-    console.log(`[api] recordings directory: ${config.recordingsDir}`);
   });
 
   // Every few hours, drop Twilio's copy of recordings we already hold locally.
