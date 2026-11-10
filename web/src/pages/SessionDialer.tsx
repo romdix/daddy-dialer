@@ -66,6 +66,7 @@ export function SessionDialer() {
   const [callbackFor, setCallbackFor] = useState<string | null>(null);
   const [callbackAt, setCallbackAt] = useState('');
   const [note, setNote] = useState('');
+  const [lines, setLines] = useState(1);
 
   const { data, refetch } = useQuery<{ session: any; leads: Row[] }>({
     queryKey: ['session', id],
@@ -110,6 +111,23 @@ export function SessionDialer() {
         });
       } catch (e: any) {
         setToast(e?.message || 'Could not start the call');
+      }
+    },
+    [dialer, id],
+  );
+
+  /** Ring the current lead plus the next ones at the same time. */
+  const startGroup = useCallback(
+    async (group: Row[], n: number) => {
+      setToast(null);
+      try {
+        await dialer.startBatch({
+          leads: group.map((g) => ({ id: g.id, phone: g.phone, businessName: g.business_name })),
+          sessionId: id,
+          lines: n,
+        });
+      } catch (e: any) {
+        setToast(e?.message || 'Could not start the calls');
       }
     },
     [dialer, id],
@@ -243,7 +261,18 @@ export function SessionDialer() {
     ended: null as EndedCall | null,
   });
   handlers.current = {
-    call: () => current && startCall(current),
+    call: () => {
+      if (!current) return;
+      if (lines > 1) {
+        const group: Row[] = [current];
+        for (let i = index + 1; i < leads.length && group.length < lines; i++) {
+          if (leads[i].queue_status === 'pending') group.push(leads[i]);
+        }
+        startGroup(group, lines);
+        return;
+      }
+      startCall(current);
+    },
     hangup: () => dialer.hangup(),
     dispose,
     move,
@@ -371,8 +400,22 @@ export function SessionDialer() {
 
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 {!inCall && !ended && (
-                  <button className="btn-primary px-6" onClick={() => startCall(current)} disabled={blocked}>
-                    {blocked ? 'Blocked' : 'Call now'}
+                  <button
+                    className="btn-primary px-6"
+                    onClick={() => {
+                      if (lines > 1) {
+                        const group: Row[] = [current];
+                        for (let i = index + 1; i < leads.length && group.length < lines; i++) {
+                          if (leads[i].queue_status === 'pending') group.push(leads[i]);
+                        }
+                        startGroup(group, lines);
+                      } else {
+                        startCall(current);
+                      }
+                    }}
+                    disabled={blocked}
+                  >
+                    {blocked ? 'Blocked' : lines > 1 ? `Call ${lines} at once` : 'Call now'}
                   </button>
                 )}
                 {inCall && (
@@ -405,6 +448,18 @@ export function SessionDialer() {
                         className="accent-check"
                       />
                       auto-dial next
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-muted">
+                      lines
+                      <select
+                        className="field !w-14 !py-1 !text-2xs"
+                        value={lines}
+                        onChange={(e) => setLines(Number(e.target.value))}
+                      >
+                        <option value={1}>1</option>
+                        <option value={2}>2</option>
+                        <option value={3}>3</option>
+                      </select>
                     </label>
                   </>
                 )}

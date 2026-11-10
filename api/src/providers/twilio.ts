@@ -114,7 +114,7 @@ export const twilioProvider: DialerProvider = {
     const base = `${publicUrl}/api/voice`;
     // Inside an XML attribute the separator must be &amp;.
     const qs = `callLogId=${encodeURIComponent(r.callLogId)}&amp;workspaceId=${encodeURIComponent(r.workspaceId)}`;
-    const room = conferenceRoom(r.callLogId);
+    const room = r.room || conferenceRoom(r.callLogId);
     const record =
       r.record === false
         ? ''
@@ -134,7 +134,7 @@ export const twilioProvider: DialerProvider = {
    * endConferenceOnExit: when the lead hangs up, the agent's leg closes too.
    */
   leadMarkup(r: OutboundRequest) {
-    const room = conferenceRoom(r.callLogId);
+    const room = r.room || conferenceRoom(r.callLogId);
     // endConferenceOnExit=false on purpose: when the lead is pulled out for a
     // voicemail drop we redirect their leg, and tearing the room down first
     // would cut the message off. The server ends the agent's leg afterwards.

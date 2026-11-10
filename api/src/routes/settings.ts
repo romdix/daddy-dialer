@@ -40,6 +40,8 @@ function publicView(s: any) {
     recordingEnabled: s?.recording_enabled ?? true,
     recordingRetentionDays: s?.recording_retention_days ?? 7,
     amdEnabled: s?.amd_enabled ?? true,
+    parallelLines: s?.parallel_lines ?? 1,
+    localPresenceEnabled: s?.local_presence_enabled ?? true,
     ringTimeoutSec: s?.ring_timeout_sec ?? 60,
     compliance: {
       enforce: s?.enforce_compliance ?? true,
@@ -143,6 +145,13 @@ settingsRouter.put(
         b.amdEnabled ?? current?.amd_enabled ?? true,
       ],
     );
+
+    // Settings the giant insert above doesn't carry.
+    await q(`update settings set parallel_lines=$2, local_presence_enabled=$3 where workspace_id=$1`, [
+      ws,
+      Math.max(1, Math.min(3, Number(b.parallelLines ?? current?.parallel_lines ?? 1))),
+      b.localPresenceEnabled ?? current?.local_presence_enabled ?? true,
+    ]);
 
     // Keep the caller-ID list in step with the number saved in Settings.
     const savedNumber = (t.number ?? current?.twilio_number ?? null) || null;

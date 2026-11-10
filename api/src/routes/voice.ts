@@ -67,8 +67,20 @@ async function ensureTwimlApp(ws: string, s: ProviderSettings, req: any): Promis
   return s;
 }
 
+/** Area code of a NANP number (+1 AAA NXX XXXX), or null. */
+function areaCode(e164: string): string | null {
+  const d = (e164 || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('1')) return d.slice(1, 4);
+  return null;
+}
+
 /** Choose which number to call from: an explicit pick, else rotate by least-recent use. */
-async function pickCallerId(ws: string, fallback: string | null, preferred?: string): Promise<string | null> {
+async function pickCallerId(
+  ws: string,
+  fallback: string | null,
+  preferred?: string,
+  leadPhone?: string,
+): Promise<string | null> {
   if (preferred) {
     const norm = normalizePhone(preferred);
     if (norm) {
@@ -80,6 +92,25 @@ async function pickCallerId(ws: string, fallback: string | null, preferred?: str
       }
     }
   }
+
+  // Local presence: if we own a number in the lead's area code, use it — people
+  // answer local numbers far more often than out-of-state ones.
+  const settings = await one<any>(`select local_presence_enabled from settings where workspace_id=$1`, [ws]);
+  const ac = leadPhone ? areaCode(leadPhone) : null;
+  if (settings?.local_presence_enabled !== false && ac) {
+    const local = await one<any>(
+      `select number from caller_ids
+        where workspace_id=$1 and active and number like $2
+        order by last_used_at asc nulls first, created_at asc
+        limit 1`,
+      [ws, `+1${ac}%`],
+    );
+    if (local) {
+      await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, local.number]);
+      return local.number;
+    }
+  }
+
   const next = await one<any>(
     `select number from caller_ids
       where workspace_id=$1 and active
@@ -179,7 +210,7 @@ voiceRouter.post(
     const numbers = p.numbers(s);
 
     // Pick the caller ID first (explicit choice or rotation), then fall back.
-    const fromNumber = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''));
+    const fromNumber = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), toE164(norm));
     if (!fromNumber) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
     const row = await one<any>(
@@ -220,6 +251,84 @@ voiceRouter.post(
 
     const unknown = () =>
       res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Unknown call.</Say></Response>');
+
+    // Parallel dialling: the browser joins one room, and every lead in the batch
+    // is rung into it. First one to answer wins; the rest are hung up.
+    const batchId = String(b.batchId || b.BatchId || '');
+    if (isUuid(batchId) && isUuid(workspaceId)) {
+      const batch = await one<any>(`select * from call_batches where id=$1 and workspace_id=$2`, [batchId, workspaceId]);
+      if (!batch) return unknown();
+
+      const first = await one<any>(`select * from call_logs where batch_id=$1 order by called_at asc limit 1`, [batchId]);
+      if (!first) return unknown();
+
+      const sb = await loadSettings(workspaceId);
+      const pb = getProvider(first.provider);
+      const agentMarkup = pb.agentMarkup?.bind(pb);
+      if (!agentMarkup) return unknown();
+
+      const settingsRow = await one<any>(
+        `select recording_enabled, ring_timeout_sec, amd_enabled, voicemail_drop_enabled from settings where workspace_id=$1`,
+        [workspaceId],
+      );
+
+      if (agentSid) {
+        await q(`update call_batches set agent_call_sid=coalesce(agent_call_sid,$2) where id=$1`, [batchId, agentSid]);
+      }
+
+      res.type('text/xml').send(
+        agentMarkup(
+          {
+            to: first.to_number,
+            from: first.from_number,
+            callLogId: first.id,
+            workspaceId,
+            room: `batch-${batchId}`,
+            record: settingsRow?.recording_enabled !== false,
+            ringTimeout: settingsRow?.ring_timeout_sec || 60,
+            // Machine detection is off in parallel mode: a machine joining would
+            // win the race and kill calls where a real person was answering.
+            detectVoicemail: false,
+            voicemailDrop: false,
+          },
+          publicUrl,
+        ),
+      );
+
+      setImmediate(async () => {
+        const pending = await q<any>(
+          `select * from call_logs where batch_id=$1 and (lead_call_sid is null or lead_call_sid='')`,
+          [batchId],
+        );
+        for (const r of pending) {
+          const claimed = await one<any>(
+            `update call_logs set lead_call_sid='pending', status='connecting'
+              where id=$1 and (lead_call_sid is null or lead_call_sid='') returning id`,
+            [r.id],
+          );
+          if (!claimed) continue;
+          try {
+            const out = await pb.dialIntoConference!(sb, {
+              to: r.to_number,
+              from: r.from_number,
+              callLogId: r.id,
+              workspaceId,
+              publicUrl,
+              ringTimeout: settingsRow?.ring_timeout_sec || 60,
+              detectVoicemail: false,
+            });
+            await q(`update call_logs set lead_call_sid=$2, provider_call_id=$2 where id=$1`, [r.id, out.sid]);
+            console.log('[voice] batch dialed', r.id.slice(0, 8), out.sid);
+          } catch (e: any) {
+            await q(`update call_logs set status='failed', error=$2, ended_at=now() where id=$1`, [
+              r.id,
+              String(e?.message || 'Dial failed').slice(0, 300),
+            ]);
+          }
+        }
+      });
+      return;
+    }
 
     if (!isUuid(callLogId) || !isUuid(workspaceId)) return unknown();
 
@@ -333,7 +442,10 @@ voiceRouter.post(
 
     const p = getProvider(call.provider);
     if (!p.leadMarkup) return hangup();
-    res.type('text/xml').send(p.leadMarkup({ to: call.to_number, from: call.from_number, callLogId, workspaceId }));
+    const room = call.batch_id ? `batch-${call.batch_id}` : undefined;
+    res.type('text/xml').send(
+      p.leadMarkup({ to: call.to_number, from: call.from_number, callLogId, workspaceId, room }),
+    );
   }),
 );
 
@@ -368,6 +480,46 @@ voiceRouter.post(
           where id=$1`,
         [callLogId, participant],
       );
+
+      // Parallel dialling: whoever answers first wins, everyone else is dropped
+      // so nobody is left listening to a ringing phone.
+      if (call.batch_id) {
+        const siblings = await q<any>(
+          `select id, lead_call_sid, session_id, lead_id from call_logs
+            where batch_id=$1 and id<>$2 and lead_call_sid like 'CA%'
+              and status not in ('completed','no_answer','busy','failed','canceled')`,
+          [call.batch_id, callLogId],
+        );
+        if (siblings.length) {
+          try {
+            const s2 = await loadSettings(call.workspace_id);
+            const p2 = getProvider(call.provider);
+            for (const sib of siblings) {
+              try {
+                await p2.endCall?.(s2, sib.lead_call_sid);
+              } catch {
+                /* already gone */
+              }
+              await q(
+                `update call_logs set status='canceled', ended_at=now(), error='Cancelled — another call was answered first'
+                  where id=$1`,
+                [sib.id],
+              );
+              // Keep them out of this session's queue; they were never really tried.
+              if (sib.session_id && sib.lead_id) {
+                await q(
+                  `update session_leads set status='done', called_at=coalesce(called_at, now())
+                    where session_id=$1 and lead_id=$2`,
+                  [sib.session_id, sib.lead_id],
+                );
+              }
+            }
+            console.log('[voice] batch release', callLogId.slice(0, 8), 'dropped', siblings.length);
+          } catch (e: any) {
+            console.error('[voice] batch release failed', e?.message);
+          }
+        }
+      }
       return;
     }
 
@@ -393,7 +545,11 @@ voiceRouter.post(
       // The lead is gone — free the agent's leg too, so nobody sits in an empty
       // room. Slight delay: during a voicemail drop the lead is redirected out
       // of the conference and must not be cut off mid-message.
-      const agentSid = String(call.agent_call_sid || '');
+      let agentSid = String(call.agent_call_sid || '');
+      if (!agentSid && call.batch_id) {
+        const b = await one<any>(`select agent_call_sid from call_batches where id=$1`, [call.batch_id]);
+        agentSid = String(b?.agent_call_sid || '');
+      }
       if (agentSid.startsWith('CA')) {
         setTimeout(() => {
           (async () => {
@@ -710,6 +866,148 @@ voiceRouter.post(
 
     console.log('[voice] voicemail message played', callLogId.slice(0, 8));
     xml(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}<Hangup/></Response>`);
+  }),
+);
+
+/* ------------------------------------------------------------------------- *
+ * Parallel dialling
+ * ------------------------------------------------------------------------- */
+
+/** Queue N leads at once. The browser then joins one room with all of them. */
+voiceRouter.post(
+  '/batch',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const leadIds: string[] = (Array.isArray(req.body?.leadIds) ? req.body.leadIds : [])
+      .map((x: any) => String(x))
+      .filter(isUuid);
+    if (!leadIds.length) return res.status(400).json({ error: 'Pick at least one lead' });
+
+    const s = await loadSettings(ws);
+    const p = ensureConfigured(s);
+    const numbers = p.numbers(s);
+    const cfg = await one<any>(`select parallel_lines from settings where workspace_id=$1`, [ws]);
+    const lines = Math.max(1, Math.min(3, Number(req.body?.lines || cfg?.parallel_lines || 1)));
+    const picked = leadIds.slice(0, lines);
+
+    const batch = await one<any>(`insert into call_batches (workspace_id, session_id) values ($1,$2) returning id`, [
+      ws,
+      req.body?.sessionId || null,
+    ]);
+
+    const comp = await loadCompliance(ws);
+    const calls: any[] = [];
+    const blocked: any[] = [];
+
+    for (const leadId of picked) {
+      const lead = await one<any>(
+        `select id, phone, state, timezone, outcome, attempts, callback_at from leads where id=$1 and workspace_id=$2`,
+        [leadId, ws],
+      );
+      if (!lead) continue;
+
+      const verdict = checkCallable(lead, comp);
+      if (!verdict.callable) {
+        blocked.push({ leadId, reason: verdict.reason });
+        continue;
+      }
+      const norm = normalizePhone(lead.phone);
+      if (!norm) {
+        blocked.push({ leadId, reason: 'Phone number is not valid' });
+        continue;
+      }
+
+      const to = toE164(norm);
+      const from = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), to);
+      const row = await one<any>(
+        `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at, batch_id)
+         values ($1,$2,$3,$4,$5,$6,'queued',now(),$7) returning id`,
+        [ws, lead.id, req.body?.sessionId || null, p.id, from, to, batch.id],
+      );
+      await q(`update leads set attempts=attempts+1, last_called_at=now() where id=$1`, [lead.id]);
+      calls.push({ callLogId: row.id, leadId: lead.id, to, from });
+    }
+
+    if (!calls.length) {
+      await q(`delete from call_batches where id=$1`, [batch.id]);
+      return res.status(409).json({ error: blocked[0]?.reason || 'Nothing in that batch can be dialled', blocked });
+    }
+
+    const signing = await ensureTwimlApp(ws, await ensureApiKey(ws, s), req);
+    const creds = await p.browserToken(signing, req.ctx!.userId);
+    res.json({ batchId: batch.id, token: creds.token, calls, blocked, provider: p.id });
+  }),
+);
+
+/** Live view of a batch: which number answered, which are still ringing. */
+voiceRouter.get(
+  '/batch/:id',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const batch = await one<any>(`select * from call_batches where id=$1 and workspace_id=$2`, [req.params.id, ws]);
+    if (!batch) return res.status(404).json({ error: 'Not found' });
+
+    const rows = await q<any>(
+      `select c.id, c.lead_id, c.status, c.outcome, c.connected_at, c.ended_at,
+              extract(epoch from (now()-c.connected_at))::int as elapsed,
+              l.business_name, l.phone
+         from call_logs c
+         left join leads l on l.id = c.lead_id
+        where c.batch_id=$1
+        order by c.called_at asc`,
+      [batch.id],
+    );
+
+    const winner = rows.find((r) => r.connected_at) || null;
+    res.json({
+      batchId: batch.id,
+      calls: rows,
+      winnerId: winner?.id || null,
+      active: rows.some((r) => !r.ended_at),
+      elapsedSec: Math.max(0, winner?.elapsed || 0),
+    });
+  }),
+);
+
+/** Hang up everything in a batch (agent pressed hang up). */
+voiceRouter.post(
+  '/batch/:id/end',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const batch = await one<any>(`select * from call_batches where id=$1 and workspace_id=$2`, [req.params.id, ws]);
+    if (!batch) return res.status(404).json({ error: 'Not found' });
+
+    const s = await loadSettings(ws);
+    const rows = await q<any>(
+      `select id, lead_call_sid, provider from call_logs
+        where batch_id=$1 and status not in ('completed','no_answer','busy','failed','canceled')`,
+      [batch.id],
+    );
+
+    for (const r of rows) {
+      const p = getProvider(r.provider);
+      if (String(r.lead_call_sid || '').startsWith('CA')) {
+        try {
+          await p.endCall?.(s, r.lead_call_sid);
+        } catch {
+          /* already gone */
+        }
+      }
+      await q(`update call_logs set status='canceled', ended_at=now() where id=$1 and ended_at is null`, [r.id]);
+    }
+
+    if (batch.agent_call_sid) {
+      try {
+        await getProvider('twilio').endCall?.(s, batch.agent_call_sid);
+      } catch {
+        /* ignore */
+      }
+    }
+    await q(`update call_batches set ended_at=now() where id=$1`, [batch.id]);
+    res.json({ ok: true });
   }),
 );
 

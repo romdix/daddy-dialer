@@ -25,6 +25,10 @@ export interface OutboundRequest {
   ringTimeout?: number;
   /** Run answering-machine detection (billed per call by the provider). */
   detectVoicemail?: boolean;
+  /** Play the voicemail message when a machine answers. */
+  voicemailDrop?: boolean;
+  /** Explicit conference room (parallel dialling puts several leads in one room). */
+  room?: string;
 }
 
 export interface DialerProvider {

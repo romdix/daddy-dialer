@@ -16,6 +16,8 @@ interface SettingsShape {
   recordingEnabled: boolean;
   recordingRetentionDays: number;
   amdEnabled: boolean;
+  parallelLines: number;
+  localPresenceEnabled: boolean;
   ringTimeoutSec: number;
   compliance: {
     enforce: boolean;
@@ -496,14 +498,47 @@ export function Settings() {
             <div>
               <label className="label">Ring timeout (seconds)</label>
               <input
-                className="field !w-32 mono"
+                className="field mono !w-24"
                 type="number"
                 min={10}
-                max={60}
+                max={90}
                 value={form.ringTimeoutSec}
                 onChange={(e) => setForm({ ...form, ringTimeoutSec: Number(e.target.value) })}
               />
             </div>
+
+            <div>
+              <label className="label">Parallel lines (default)</label>
+              <select
+                className="field mono !w-24"
+                value={form.parallelLines}
+                onChange={(e) => setForm({ ...form, parallelLines: Number(e.target.value) })}
+              >
+                <option value={1}>1 — one at a time</option>
+                <option value={2}>2 lines</option>
+                <option value={3}>3 lines</option>
+              </select>
+              <p className="mt-1 text-2xs text-muted">
+                Rings several numbers at once and drops the rest when one answers. Maximum 3. Every unanswered ring
+                still counts as an attempt on that lead.
+              </p>
+            </div>
+
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span>
+                Local presence
+                <span className="block text-2xs text-muted">
+                  When you own a number in the lead’s area code, call from it. Only matters once you have more than one
+                  number.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={form.localPresenceEnabled}
+                onChange={(e) => setForm({ ...form, localPresenceEnabled: e.target.checked })}
+                className="h-4 w-4 accent-check"
+              />
+            </label>
 
             <div>
               <label className="label">Microphone</label>

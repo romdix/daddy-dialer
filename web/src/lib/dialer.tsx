@@ -22,6 +22,14 @@ interface DialerValue {
   error: string | null;
   clearError: () => void;
   start: (o: { to: string; leadId?: string | null; sessionId?: string | null; label?: string; mode?: 'pstn' | 'conference'; callerId?: string }) => Promise<string>;
+  /** Ring several leads at once; the first to answer wins. */
+  startBatch: (o: {
+    leads: { id: string; phone: string; businessName?: string }[];
+    sessionId?: string | null;
+    callerId?: string;
+    lines?: number;
+  }) => Promise<{ batchId: string; calls: any[] }>;
+  batch: { id: string; calls: any[]; winnerId: string | null } | null;
   hangup: () => void;
   toggleMute: () => void;
   sendDigit: (d: string) => void;
@@ -110,7 +118,10 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
   const [incoming, setIncoming] = useState<{ from: string; callLogId: string } | null>(null);
   const [callerId, setCallerIdState] = useState<string>(() => localStorage.getItem('dd.callerId') || '');
   const [activeFrom, setActiveFrom] = useState<string>('');
+  const [batch, setBatch] = useState<{ id: string; calls: any[]; winnerId: string | null } | null>(null);
   const incomingRef = useRef<any>(null);
+  const batchRef = useRef<string | null>(null);
+  const batchWinnerRef = useRef<string | null>(null);
 
   const setCallerId = useCallback((v: string) => {
     setCallerIdState(v);
@@ -284,6 +295,9 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       cleanupTimer();
       startingRef.current = false;
       liveRef.current = false;
+      batchRef.current = null;
+      batchWinnerRef.current = null;
+      setBatch(null);
       const info = { ...(activeRef.current || { callLogId: callLogId || '', to: '' }) } as StartedCall;
       const dur = secondsRef.current;
       setStatus('ended');
@@ -424,13 +438,132 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
     [beginPolling, callerId, ensureDevice, finish, inputDevice, workspaceId],
   );
 
+  /** Ring several leads at once — whoever answers first takes the room. */
+  const startBatch = useCallback(
+    async (o: {
+      leads: { id: string; phone: string; businessName?: string }[];
+      sessionId?: string | null;
+      callerId?: string;
+      lines?: number;
+    }) => {
+      setError(null);
+      if (callRef.current || startingRef.current) throw new Error('A call is already in progress');
+      if (!o.leads.length) throw new Error('Nothing to dial');
+      startingRef.current = true;
+
+      let res: any;
+      try {
+        res = await api.post<any>('/api/voice/batch', {
+          leadIds: o.leads.map((l) => l.id),
+          sessionId: o.sessionId || undefined,
+          callerId: o.callerId || callerId || undefined,
+          lines: o.lines || o.leads.length,
+        });
+      } catch (e) {
+        startingRef.current = false;
+        throw e;
+      }
+
+      const first = res.calls[0];
+      const info: StartedCall = {
+        callLogId: first.callLogId,
+        to: first.to,
+        label: `${res.calls.length} lines`,
+        leadId: first.leadId,
+        sessionId: o.sessionId || null,
+      };
+      activeRef.current = info;
+      setActive(info);
+      setActiveFrom(first.from || '');
+      secondsRef.current = 0;
+      setSeconds(0);
+      setStatus('connecting');
+      batchRef.current = res.batchId;
+      batchWinnerRef.current = null;
+      setBatch({ id: res.batchId, calls: res.calls, winnerId: null });
+
+      let device;
+      try {
+        device = await ensureDevice(res.token);
+      } catch (e) {
+        startingRef.current = false;
+        throw e;
+      }
+
+      const call = await device.connect({ params: { batchId: res.batchId, workspaceId } });
+      callRef.current = call;
+      startingRef.current = false;
+
+      call.on('accept', () => {
+        liveRef.current = true;
+        setStatus('ringing');
+      });
+      call.on('disconnect', () => finish('completed', batchWinnerRef.current || first.callLogId));
+      call.on('cancel', () => finish('canceled', first.callLogId));
+      call.on('error', (e: any) => {
+        setError(e?.message || 'Call failed');
+        finish('failed', first.callLogId);
+      });
+
+      const tick = async () => {
+        try {
+          const st = await api.get<any>(`/api/voice/batch/${res.batchId}`);
+          setBatch({ id: res.batchId, calls: st.calls || [], winnerId: st.winnerId || null });
+
+          if (st.winnerId && batchWinnerRef.current !== st.winnerId) {
+            batchWinnerRef.current = st.winnerId;
+            const w = (st.calls || []).find((c: any) => c.id === st.winnerId);
+            const winner: StartedCall = {
+              ...(activeRef.current as StartedCall),
+              callLogId: st.winnerId,
+              leadId: w?.lead_id || null,
+              label: w?.business_name || '',
+            };
+            activeRef.current = winner;
+            setActive(winner);
+            setStatus('live');
+            if (!timer.current) {
+              secondsRef.current = st.elapsedSec || 0;
+              setSeconds(secondsRef.current);
+              timer.current = setInterval(() => {
+                secondsRef.current += 1;
+                setSeconds(secondsRef.current);
+              }, 1000);
+            }
+          }
+
+          if (!st.active) {
+            cleanupTimer();
+            try {
+              callRef.current?.disconnect();
+            } catch {
+              /* ignore */
+            }
+            finish(st.winnerId ? 'completed' : 'no_answer', st.winnerId || first.callLogId);
+          }
+        } catch {
+          /* transient */
+        }
+      };
+
+      tick();
+      pollRef.current = setInterval(tick, 1500);
+      return { batchId: res.batchId, calls: res.calls };
+    },
+    [callerId, ensureDevice, finish, workspaceId],
+  );
+
   const hangup = useCallback(() => {
+    const bid = batchRef.current;
+    if (bid) {
+      api.post(`/api/voice/batch/${bid}/end`, {}).catch(() => {});
+    }
     try {
       callRef.current?.disconnect();
     } catch {
       /* ignore */
     }
-    finish('hangup');
+    finish('hangup', batchWinnerRef.current || undefined);
   }, [finish]);
 
   const toggleMute = useCallback(() => {
@@ -496,6 +629,8 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       error,
       clearError: () => setError(null),
       start,
+      startBatch,
+      batch,
       hangup,
       toggleMute,
       sendDigit,
@@ -511,7 +646,7 @@ export function DialerProvider({ children, workspaceId }: { children: React.Reac
       setCallerId,
       activeFrom,
     }),
-    [status, active, lastEnded, muted, seconds, error, start, hangup, toggleMute, sendDigit, inputDevices, inputDevice, refreshInputs, selectInputDevice, setEndedHandler, incoming, answerIncoming, declineIncoming, callerId, setCallerId, activeFrom],
+    [status, active, lastEnded, muted, seconds, error, start, startBatch, batch, hangup, toggleMute, sendDigit, inputDevices, inputDevice, refreshInputs, selectInputDevice, setEndedHandler, incoming, answerIncoming, declineIncoming, callerId, setCallerId, activeFrom],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
