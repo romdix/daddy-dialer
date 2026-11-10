@@ -38,7 +38,7 @@ export async function attachUser(req: Request, _res: Response, next: NextFunctio
          join workspace_members m on m.user_id = u.id
          join workspaces w on w.id = m.workspace_id
         where s.token_hash = $1 and s.expires_at > now()
-        order by m.created_at asc
+        order by w.created_at asc
         limit 1`,
       [sha256(raw)],
     );

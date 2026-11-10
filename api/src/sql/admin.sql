@@ -30,4 +30,17 @@ update call_logs c
    and m.workspace_id = c.workspace_id
    and m.role = 'owner';
 
+-- Single tenant: every account works in the primary (oldest) workspace. Accounts
+-- created by the old sign-up flow otherwise sat in their own empty workspace and
+-- saw no leads.
+insert into workspace_members (workspace_id, user_id, role)
+select (select id from workspaces order by created_at asc limit 1), u.id, 'member'
+  from users u
+ where not exists (
+   select 1
+     from workspace_members m
+    where m.user_id = u.id
+      and m.workspace_id = (select id from workspaces order by created_at asc limit 1)
+ );
+
 -- Existing leads are left unassigned on purpose: the admin hands them out.
