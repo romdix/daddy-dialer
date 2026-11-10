@@ -72,7 +72,8 @@ export function VoicemailPanel() {
         <span>
           Leave a voicemail automatically
           <span className="block text-2xs text-muted">
-            Requires “Detect voicemail” above, and waits for the greeting to finish before speaking.
+            Only plays when Twilio hears a recording beep — never into an IVR or phone menu. Needs “Detect
+            voicemail” above.
           </span>
         </span>
         <input

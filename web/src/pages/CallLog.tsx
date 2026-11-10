@@ -16,6 +16,7 @@ interface CallRow {
   recording_sid?: string | null;
   transcript?: string | null;
   notes?: string | null;
+  answered_by?: string | null;
   called_at: string;
   session_name?: string | null;
   provider: string;
@@ -164,6 +165,12 @@ export function CallLog() {
                                 <dd className="mono">{c.from_number}</dd>
                                 <dt className="text-muted">Status</dt>
                                 <dd className="mono">{c.status}</dd>
+                                {c.answered_by && (
+                                  <>
+                                    <dt className="text-muted">Detected</dt>
+                                    <dd className="mono">{c.answered_by}</dd>
+                                  </>
+                                )}
                               </dl>
                             </div>
                             <div>

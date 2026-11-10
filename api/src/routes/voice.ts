@@ -726,14 +726,25 @@ voiceRouter.post(
     if (!call) return;
 
     if (/^machine_|^fax/i.test(answeredBy)) {
-      // A machine answered: log it as a voicemail, then either play our message
-      // into it or drop the leg so the agent isn't stuck listening to a greeting.
-      await q(`update call_logs set answered_by=$2, outcome=coalesce(outcome,'voicemail') where id=$1`, [
+      // Twilio cannot distinguish a voicemail box from an IVR — both are "machine".
+      // The one signal that reliably means a recording is about to start is the
+      // beep. So: beep -> voicemail (and the drop may play), anything else machine
+      // -> IVR, and we never speak into an auto-attendant.
+      const isBeep = answeredBy === 'machine_end_beep';
+      const isFax = answeredBy === 'fax';
+      const outcome = isFax ? 'bad_number' : isBeep ? 'voicemail' : 'ivr';
+
+      await q(`update call_logs set answered_by=$2, outcome=coalesce(outcome,$3) where id=$1`, [
         callLogId,
         answeredBy,
+        outcome,
       ]);
       if (call.lead_id) {
-        await q(`update leads set outcome='voicemail', status='in_progress', updated_at=now() where id=$1`, [call.lead_id]);
+        await q(`update leads set outcome=$2, status=$3, updated_at=now() where id=$1`, [
+          call.lead_id,
+          outcome,
+          outcome === 'bad_number' ? 'disqualified' : 'in_progress',
+        ]);
       }
 
       const leadSid = String(call.lead_call_sid || '');
@@ -750,7 +761,7 @@ voiceRouter.post(
           cfg?.voicemail_drop_enabled === true &&
           (hasVoicemailAudio(call.workspace_id) || String(cfg?.voicemail_script || '').trim().length > 0);
 
-        if (dropReady && p.redirectCall && leadSid.startsWith('CA')) {
+        if (dropReady && isBeep && p.redirectCall && leadSid.startsWith('CA')) {
           const qs = `callLogId=${encodeURIComponent(callLogId)}&workspaceId=${encodeURIComponent(call.workspace_id)}`;
           await p.redirectCall(s, leadSid, `${baseUrl(req)}/api/voice/voicemail-twiml?${qs}`);
           console.log('[voice] voicemail drop', callLogId.slice(0, 8), answeredBy);
@@ -761,6 +772,7 @@ voiceRouter.post(
             }, 2500);
           }
         } else if (p.endCall && leadSid.startsWith('CA')) {
+          // IVR or unknown machine: hang up quietly, leave the disposition to the rep.
           await p.endCall(s, leadSid);
         }
       } catch (e: any) {

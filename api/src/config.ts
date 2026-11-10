@@ -55,6 +55,7 @@ export const OUTCOMES = [
   'connected_gk',
   'connected_other',
   'voicemail',
+  'ivr',
   'busy',
   'no_answer',
   'bad_number',

@@ -3,6 +3,7 @@ export const OUTCOMES = [
   'connected_gk',
   'connected_other',
   'voicemail',
+  'ivr',
   'busy',
   'no_answer',
   'bad_number',
@@ -20,6 +21,7 @@ export const OUTCOME_LABEL: Record<string, string> = {
   connected_gk: 'Connected — Gatekeeper',
   connected_other: 'Connected — Other',
   voicemail: 'Voicemail',
+  ivr: 'IVR / Phone Menu',
   busy: 'Busy',
   no_answer: 'No Answer',
   bad_number: 'Bad Number',
@@ -36,6 +38,7 @@ export const QUICK_OUTCOMES: Outcome[] = [
   'connected_gk',
   'connected_other',
   'voicemail',
+  'ivr',
   'no_answer',
   'busy',
   'callback_requested',
@@ -62,6 +65,7 @@ export function outcomeColor(o?: string | null): string {
     case 'callback_requested':
       return 'bg-sky-500/15 text-sky-400 border-sky-500/30';
     case 'voicemail':
+    case 'ivr':
     case 'no_answer':
     case 'busy':
       return 'bg-zinc-500/15 text-zinc-400 border-zinc-600/40';
