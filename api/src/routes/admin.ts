@@ -235,9 +235,26 @@ adminRouter.patch(
 adminRouter.delete(
   '/users/:id',
   wrap(async (req, res) => {
-    const r = await q(`delete from users where id=$1 returning id`, [req.params.id]);
+    const id = req.params.id;
+
+    // Hand their leads to the longest-standing teammate so nothing is orphaned.
+    const fallback = await one<{ id: string }>(
+      `select id from users where id <> $1 order by created_at asc limit 1`,
+      [id],
+    );
+    const leads = await one<{ n: number }>(`select count(*)::int as n from leads where assigned_user_id=$1`, [id]);
+    if (leads && leads.n > 0 && !fallback) {
+      return res.status(409).json({
+        error: 'This is the last user and still owns leads. Reassign or delete those leads first.',
+      });
+    }
+    if (fallback) {
+      await q(`update leads set assigned_user_id=$2, updated_at=now() where assigned_user_id=$1`, [id, fallback.id]);
+    }
+
+    const r = await q(`delete from users where id=$1 returning id`, [id]);
     if (!r.length) return res.status(404).json({ error: 'User not found' });
-    res.json({ ok: true });
+    res.json({ ok: true, leadsMovedTo: fallback?.id || null });
   }),
 );
 
