@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import fs from 'node:fs';
 import bcrypt from 'bcryptjs';
 import { one, q, tx } from '../db';
 import { wrap } from '../middleware';
+import { dec } from '../crypto';
 import {
   adminConfigured,
   checkAdminCredentials,
@@ -144,16 +146,22 @@ adminRouter.get(
     const row = await one(`select ${userColumns}, ${userStats} from users u where u.id=$1`, [id]);
     if (!row) return res.status(404).json({ error: 'User not found' });
 
-    // 14-day activity, zero-filled so the chart never has gaps.
+    // 14-day activity in New York time, zero-filled so the chart never has gaps.
     const daily = await q(
-      `select to_char(d.day, 'YYYY-MM-DD') as day,
+      `with days as (
+         select generate_series(
+           ((now() at time zone 'America/New_York')::date - 13),
+           ((now() at time zone 'America/New_York')::date),
+           interval '1 day'
+         )::date as day
+       )
+       select to_char(d.day, 'YYYY-MM-DD') as day,
               count(c.id)::int as calls,
               count(c.id) filter (where c.duration_sec > 0)::int as answered
-         from generate_series(current_date - interval '13 days', current_date, interval '1 day') d(day)
+         from days d
          left join call_logs c
                 on c.user_id = $1
-               and c.called_at >= d.day
-               and c.called_at < d.day + interval '1 day'
+               and (c.called_at at time zone 'America/New_York')::date = d.day
         group by d.day
         order by d.day`,
       [id],
@@ -451,6 +459,59 @@ adminRouter.delete(
 );
 
 /* ------------------------------------------------------------------ *
+ * One calendar day (New York time)
+ * ------------------------------------------------------------------ */
+
+const CONNECTED_OUTCOMES = new Set(['connected_dm', 'connected_gk', 'connected_other', 'appointment_set']);
+
+adminRouter.get(
+  '/users/:id/day',
+  wrap(async (req, res) => {
+    const id = req.params.id;
+    const date = String(req.query.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD is required' });
+
+    const calls = await q<any>(
+      `select c.id, c.to_number, c.status, c.outcome, c.duration_sec, c.called_at,
+              c.answered_by, c.recording_sid, c.recording_path, l.business_name
+         from call_logs c
+         left join leads l on l.id = c.lead_id
+        where c.user_id = $1
+          and (c.called_at at time zone 'America/New_York')::date = $2::date
+        order by c.called_at asc`,
+      [id, date],
+    );
+
+    const talkSec = calls.reduce((s, c) => s + (Number(c.duration_sec) || 0), 0);
+    const answered = calls.filter((c) => Number(c.duration_sec) > 0).length;
+    const connects = calls.filter((c) => CONNECTED_OUTCOMES.has(String(c.outcome || ''))).length;
+
+    const byOutcome: Record<string, number> = {};
+    for (const c of calls) {
+      const k = c.outcome || 'none';
+      byOutcome[k] = (byOutcome[k] || 0) + 1;
+    }
+
+    res.json({
+      date,
+      timezone: 'America/New_York',
+      summary: {
+        calls: calls.length,
+        answered,
+        connects,
+        talkSec,
+        avgSec: answered ? Math.round(talkSec / answered) : 0,
+        answerRate: calls.length ? Math.round((answered / calls.length) * 100) : 0,
+      },
+      outcomes: Object.entries(byOutcome)
+        .map(([outcome, count]) => ({ outcome, count }))
+        .sort((a, b) => b.count - a.count),
+      calls,
+    });
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  * Call history
  * ------------------------------------------------------------------ */
 
@@ -487,6 +548,56 @@ adminRouter.get(
     );
     const total = rows.length ? Number((rows[0] as any).total) : 0;
     res.json({ rows: rows.map(({ total: _t, ...r }: any) => r), total, page, pages: Math.ceil(total / limit) || 1 });
+  }),
+);
+
+/** Admin playback + download. Same file the rep hears, but full workspace scope. */
+adminRouter.get(
+  '/calls/:id/recording',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const call = await one<any>(`select * from call_logs where id=$1 and workspace_id=$2`, [
+      req.params.id,
+      ws,
+    ]);
+    if (!call) return res.status(404).json({ error: 'Call not found' });
+    if (!call.recording_path && !call.recording_sid) {
+      return res.status(404).json({ error: 'No recording for this call' });
+    }
+
+    const download = req.query.download === '1';
+    const stamp = new Date(call.called_at).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const number = String(call.to_number || 'unknown').replace(/[^0-9]/g, '');
+    const disposition = `${download ? 'attachment' : 'inline'}; filename="call-${number}-${stamp}.mp3"`;
+
+    if (call.recording_path && fs.existsSync(call.recording_path)) {
+      const stat = fs.statSync(call.recording_path);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', String(stat.size));
+      res.setHeader('Content-Disposition', disposition);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      return fs.createReadStream(call.recording_path).pipe(res);
+    }
+
+    const s = await one<any>(`select * from settings where workspace_id=$1`, [ws]);
+    if (!s?.twilio_account_sid || !s?.twilio_auth_token) {
+      return res.status(400).json({ error: 'Twilio is not configured' });
+    }
+
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${s.twilio_account_sid}/Recordings/${call.recording_sid}.mp3`;
+    const auth = Buffer.from(`${s.twilio_account_sid}:${dec(s.twilio_auth_token)}`).toString('base64');
+    const upstream = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).json({ error: 'Could not fetch the recording from Twilio' });
+    }
+
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'audio/mpeg');
+    const len = upstream.headers.get('content-length');
+    if (len) res.setHeader('Content-Length', len);
+    res.setHeader('Content-Disposition', disposition);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.end(Buffer.from(await upstream.arrayBuffer()));
   }),
 );
 

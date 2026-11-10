@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Leads } from './Leads';
 import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { VoicemailPanel } from '../components/VoicemailPanel';
 import { DataPanel } from '../components/DataPanel';
-import { OUTCOME_LABEL, STATUS_LABEL, fmtDateTime } from '../lib/format';
+import { OUTCOME_LABEL, STATUS_LABEL } from '../lib/format';
 
 /* ------------------------------------------------------------------ *
  * data helpers
@@ -112,19 +112,38 @@ function Pill({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 
   );
 }
 
-function Bars({ data }: { data: { day: string; calls: number; answered: number }[] }) {
+function Bars({
+  data,
+  selected,
+  onPick,
+}: {
+  data: { day: string; calls: number; answered: number }[];
+  selected?: string;
+  onPick?: (day: string) => void;
+}) {
   const max = Math.max(1, ...data.map((d) => d.calls));
   return (
     <div className="flex h-32 items-end gap-1.5">
       {data.map((d) => (
-        <div key={d.day} className="group relative flex flex-1 flex-col justify-end gap-0.5" title={`${d.day}: ${d.calls} calls, ${d.answered} answered`}>
-          <div className="relative w-full rounded-t-sm bg-ink-700/70" style={{ height: `${(d.calls / max) * 100}%`, minHeight: d.calls ? 3 : 1 }}>
+        <button
+          key={d.day}
+          type="button"
+          onClick={() => onPick?.(d.day)}
+          className={`group relative flex h-full flex-1 flex-col justify-end gap-0.5 rounded-sm px-0.5 transition-colors ${
+            selected === d.day ? 'bg-ink-800' : 'hover:bg-ink-800/60'
+          }`}
+          title={`${fmtDay(d.day)} — ${d.calls} calls, ${d.answered} answered`}
+        >
+          <div
+            className="relative w-full rounded-t-sm bg-ink-700/70"
+            style={{ height: `${(d.calls / max) * 100}%`, minHeight: d.calls ? 3 : 1 }}
+          >
             <div
               className="absolute bottom-0 w-full rounded-t-sm bg-accent/70"
               style={{ height: d.calls ? `${(d.answered / d.calls) * 100}%` : 0 }}
             />
           </div>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -136,6 +155,30 @@ const fmtTalk = (sec: number) => {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ${s % 60}s`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+
+/** Every admin timestamp is shown in the business timezone, not the viewer's laptop. */
+const fmtNY = (iso?: string | null) =>
+  iso
+    ? new Date(iso).toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : '—';
+
+const nyToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+const fmtDay = (day: string) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 };
 
 /* ------------------------------------------------------------------ *
@@ -409,7 +452,7 @@ function UserTable({ rows, onOpenUser }: { rows: any[]; onOpenUser: (id: string)
                   <td className="td text-right mono text-zinc-400">{u.callsWeek}</td>
                   <td className="td text-right mono text-zinc-400">{rate}%</td>
                   <td className="td text-right mono text-zinc-400">{u.leadsAssigned}</td>
-                  <td className="td text-2xs text-zinc-500">{u.lastCallAt ? fmtDateTime(u.lastCallAt) : '—'}</td>
+                  <td className="td text-2xs text-zinc-500">{u.lastCallAt ? fmtNY(u.lastCallAt) : '—'}</td>
                   <td className="td text-right text-muted">→</td>
                 </tr>
               );
@@ -581,7 +624,7 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
         <div className="text-right">
           <p className="text-2xs uppercase tracking-wider text-muted">Last call</p>
-          <p className="mt-0.5 text-xs text-zinc-300">{u.lastCallAt ? fmtDateTime(u.lastCallAt) : 'never'}</p>
+          <p className="mt-0.5 text-xs text-zinc-300">{u.lastCallAt ? fmtNY(u.lastCallAt) : 'never'}</p>
         </div>
       </div>
 
@@ -613,7 +656,7 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
         ))}
       </div>
 
-      {tab === 'overview' && <UserOverview data={data} />}
+      {tab === 'overview' && <UserOverview data={data} userId={u.id} />}
       {tab === 'leads' && <Leads asUserId={u.id} />}
       {tab === 'settings' && <UserSettings user={u} onSaved={load} />}
       {tab === 'calls' && <UserCalls userId={u.id} />}
@@ -621,10 +664,26 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
-function UserOverview({ data }: { data: any }) {
+function UserOverview({ data, userId }: { data: any; userId: string }) {
   const outcomes: any[] = data.outcomes || [];
   const statuses: any[] = data.statuses || [];
   const totalOutcomes = outcomes.reduce((s, o) => s + o.count, 0) || 1;
+
+  const [day, setDay] = useState<string>(nyToday());
+  const [dayData, setDayData] = useState<any>(null);
+  const [dayBusy, setDayBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setDayBusy(true);
+    j(`/api/admin/users/${userId}/day?date=${day}`)
+      .then((d) => alive && setDayData(d))
+      .catch(() => alive && setDayData(null))
+      .finally(() => alive && setDayBusy(false));
+    return () => {
+      alive = false;
+    };
+  }, [userId, day]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -632,6 +691,7 @@ function UserOverview({ data }: { data: any }) {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold">Last 14 days</h2>
           <div className="flex items-center gap-3 text-2xs text-muted">
+            <span className="rounded border border-ink-700 px-1.5 py-0.5">New York time</span>
             <span className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-sm bg-ink-700" /> calls
             </span>
@@ -640,11 +700,12 @@ function UserOverview({ data }: { data: any }) {
             </span>
           </div>
         </div>
-        <Bars data={data.daily || []} />
+        <Bars data={data.daily || []} selected={day} onPick={setDay} />
         <div className="mt-2 flex justify-between text-2xs text-zinc-600">
-          <span>{data.daily?.[0]?.day}</span>
-          <span>{data.daily?.[data.daily.length - 1]?.day}</span>
+          <span>{data.daily?.[0]?.day ? fmtDay(data.daily[0].day) : ''}</span>
+          <span>{data.daily?.length ? fmtDay(data.daily[data.daily.length - 1].day) : ''}</span>
         </div>
+        <p className="mt-2 text-2xs text-zinc-600">Click a bar to see that day.</p>
       </div>
 
       <div className="panel p-4">
@@ -692,6 +753,60 @@ function UserOverview({ data }: { data: any }) {
           ))}
           {(data.recentLeads || []).length === 0 && <li className="py-2 text-xs text-muted">Nothing yet.</li>}
         </ul>
+      </div>
+
+      <div className="panel p-4 lg:col-span-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Day detail</h2>
+            <p className="mt-0.5 text-2xs text-muted">
+              One calendar day in <span className="text-zinc-400">New York time</span>. Pick any date.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost !py-1 text-2xs" onClick={() => setDay(nyToday())}>
+              Today
+            </button>
+            <input
+              type="date"
+              className="field mono !w-auto !py-1.5 text-xs"
+              value={day}
+              max={nyToday()}
+              onChange={(e) => setDay(e.target.value || nyToday())}
+            />
+          </div>
+        </div>
+
+        {dayBusy && <p className="mt-4 text-xs text-muted">Loading…</p>}
+
+        {!dayBusy && dayData && (
+          <>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <Stat label="Calls" value={dayData.summary.calls} />
+              <Stat label="Answered" value={dayData.summary.answered} hint={`${dayData.summary.answerRate}% answer rate`} />
+              <Stat label="Conversations" value={dayData.summary.connects} />
+              <Stat label="Talk time" value={fmtTalk(dayData.summary.talkSec)} />
+              <Stat label="Avg call" value={dayData.summary.avgSec ? fmtTalk(dayData.summary.avgSec) : '—'} />
+            </div>
+
+            {dayData.outcomes?.length > 0 && (
+              <div className="mt-4">
+                <p className="text-2xs uppercase tracking-wider text-muted">Outcomes</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {dayData.outcomes.map((o: any) => (
+                    <Pill key={o.outcome} tone="muted">
+                      {o.outcome === 'none' ? 'no outcome' : OUTCOME_LABEL[o.outcome] || o.outcome} · {o.count}
+                    </Pill>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 overflow-hidden rounded border border-ink-800">
+              <CallTable data={{ rows: dayData.calls || [] }} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -885,6 +1000,8 @@ function UserCalls({ userId }: { userId: string }) {
 }
 
 function CallTable({ data }: { data: any }) {
+  const [open, setOpen] = useState<string | null>(null);
+
   if (!data) return <div className="p-6 text-xs text-muted">Loading…</div>;
   if (!data.rows?.length) return <div className="p-10 text-center text-xs text-muted">No calls recorded.</div>;
 
@@ -893,30 +1010,63 @@ function CallTable({ data }: { data: any }) {
       <table className="w-full">
         <thead className="bg-ink-900">
           <tr>
-            <th className="th">When</th>
+            <th className="th">When (NY)</th>
             <th className="th">Business</th>
             <th className="th">Number</th>
             <th className="th">Result</th>
             <th className="th text-right">Duration</th>
             <th className="th">Person</th>
+            <th className="th text-right">Recording</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((c: any) => (
-            <tr key={c.id}>
-              <td className="td whitespace-nowrap text-2xs text-zinc-500">{fmtDateTime(c.called_at)}</td>
-              <td className="td max-w-[220px] truncate">{c.business_name || <span className="text-zinc-600">—</span>}</td>
-              <td className="td mono text-zinc-400">{c.to_number}</td>
-              <td className="td">
-                {c.outcome ? (
-                  <Pill tone="muted">{OUTCOME_LABEL[c.outcome] || c.outcome}</Pill>
-                ) : (
-                  <span className="text-2xs text-zinc-600">{c.status}</span>
-                )}
-              </td>
-              <td className="td text-right mono text-zinc-400">{c.duration_sec ? fmtTalk(c.duration_sec) : '—'}</td>
-              <td className="td text-2xs text-zinc-500">{c.user_email || '—'}</td>
-            </tr>
+            <Fragment key={c.id}>
+              <tr>
+                <td className="td whitespace-nowrap text-2xs text-zinc-500">{fmtNY(c.called_at)}</td>
+                <td className="td max-w-[220px] truncate">
+                  {c.business_name || <span className="text-zinc-600">—</span>}
+                </td>
+                <td className="td mono text-zinc-400">{c.to_number}</td>
+                <td className="td">
+                  {c.outcome ? (
+                    <Pill tone="muted">{OUTCOME_LABEL[c.outcome] || c.outcome}</Pill>
+                  ) : (
+                    <span className="text-2xs text-zinc-600">{c.status}</span>
+                  )}
+                </td>
+                <td className="td text-right mono text-zinc-400">{c.duration_sec ? fmtTalk(c.duration_sec) : '—'}</td>
+                <td className="td text-2xs text-zinc-500">{c.user_email || '—'}</td>
+                <td className="td text-right whitespace-nowrap">
+                  {c.recording_sid || c.recording_path ? (
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        className="btn-ghost !px-2 !py-1 text-2xs"
+                        onClick={() => setOpen(open === c.id ? null : c.id)}
+                      >
+                        {open === c.id ? 'Hide' : 'Play'}
+                      </button>
+                      <a
+                        className="btn-ghost !px-2 !py-1 text-2xs"
+                        href={`/api/admin/calls/${c.id}/recording?download=1`}
+                        download
+                      >
+                        Download
+                      </a>
+                    </div>
+                  ) : (
+                    <span className="text-2xs text-zinc-700">—</span>
+                  )}
+                </td>
+              </tr>
+              {open === c.id && (
+                <tr>
+                  <td colSpan={7} className="bg-ink-900/70 px-4 py-2">
+                    <audio controls autoPlay preload="none" className="w-full max-w-xl" src={`/api/admin/calls/${c.id}/recording`} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -928,6 +1078,8 @@ function Calls() {
   const [users, setUsers] = useState<any[]>([]);
   const [userId, setUserId] = useState('');
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
@@ -935,33 +1087,53 @@ function Calls() {
   }, []);
 
   useEffect(() => {
-    j(`/api/admin/calls?page=${page}&limit=25${userId ? `&userId=${userId}` : ''}`)
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    j(
+      `/api/admin/calls?page=${page}&limit=25${userId ? `&userId=${userId}` : ''}${
+        search ? `&search=${encodeURIComponent(search)}` : ''
+      }`,
+    )
       .then(setData)
       .catch(() => setData({ rows: [], total: 0, pages: 1 }));
-  }, [page, userId]);
+  }, [page, userId, search]);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Calls</h1>
-          <p className="mt-0.5 text-xs text-muted">Every call across the team.</p>
+          <p className="mt-0.5 text-xs text-muted">Every call across the team, times in New York.</p>
         </div>
-        <select
-          className="field !w-auto !py-1.5 text-xs"
-          value={userId}
-          onChange={(e) => {
-            setUserId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">Everyone</option>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.fullName || u.email}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <input
+            className="field !w-64 !py-1.5 text-xs"
+            placeholder="Search business or number"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          <select
+            className="field !w-auto !py-1.5 text-xs"
+            value={userId}
+            onChange={(e) => {
+              setUserId(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">Everyone</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.fullName || u.email}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="panel overflow-hidden">
