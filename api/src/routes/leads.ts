@@ -122,6 +122,79 @@ leadsRouter.get(
   }),
 );
 
+/** Whole lead list as CSV. */
+leadsRouter.get(
+  '/export.csv',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const rows = await q<any>(
+      `select business_name, phone, address, city, state, zip, website, email,
+              status, coalesce(outcome,'') as outcome, attempts, last_called_at, callback_at,
+              coalesce(notes,'') as notes, created_at
+         from leads where workspace_id=$1 order by created_at asc limit 100000`,
+      [ws],
+    );
+
+    const head = [
+      'business_name', 'phone', 'address', 'city', 'state', 'zip', 'website', 'email',
+      'status', 'outcome', 'attempts', 'last_called_at', 'callback_at', 'notes', 'created_at',
+    ];
+    const esc = (v: any) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [head.join(',')];
+    for (const r of rows) {
+      lines.push(
+        [
+          r.business_name, r.phone, r.address, r.city, r.state, r.zip, r.website, r.email,
+          r.status, r.outcome, r.attempts, r.last_called_at, r.callback_at, r.notes, r.created_at,
+        ]
+          .map(esc)
+          .join(','),
+      );
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="leads-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(lines.join('\n'));
+  }),
+);
+
+/**
+ * Do-not-call list import. Any matching lead is marked disqualified and can
+ * never be dialled again — the check runs on every call attempt.
+ */
+leadsRouter.post(
+  '/do-not-call',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const numbers: string[] = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
+    if (!numbers.length) return res.status(400).json({ error: 'Send a list of phone numbers' });
+    if (numbers.length > 20000) return res.status(400).json({ error: 'Send at most 20,000 numbers at a time' });
+
+    const norms = new Set<string>();
+    for (const n of numbers) {
+      const norm = normalizePhone(String(n || ''));
+      if (norm) norms.add(norm);
+    }
+    if (!norms.size) return res.status(400).json({ error: 'None of those looked like phone numbers' });
+
+    const list = [...norms];
+    const updated = await q<{ id: string }>(
+      `update leads
+          set outcome='do_not_call', status='disqualified', updated_at=now()
+        where workspace_id=$1 and phone_norm = any($2::text[])
+        returning id`,
+      [ws, list],
+    );
+
+    res.json({ received: numbers.length, valid: list.length, marked: updated.length });
+  }),
+);
+
 leadsRouter.get(
   '/:id',
   requireAuth,

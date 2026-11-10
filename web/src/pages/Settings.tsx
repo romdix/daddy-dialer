@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { VoicemailPanel } from '../components/VoicemailPanel';
+import { DataPanel } from '../components/DataPanel';
 import { useDialer } from '../lib/dialer';
 import { useAuth } from '../lib/auth';
 import { useBrand, onAccent } from '../lib/brand';
@@ -303,6 +304,8 @@ export function Settings() {
         <CallerIdsPanel />
 
         <VoicemailPanel />
+
+        <DataPanel />
 
         <section className="panel p-4">
           <h2 className="text-sm font-semibold">Phone provider</h2>

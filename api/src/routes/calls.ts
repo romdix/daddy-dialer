@@ -49,6 +49,46 @@ callsRouter.get(
   }),
 );
 
+/** Whole call log as CSV, for spreadsheets or reporting. */
+callsRouter.get(
+  '/export.csv',
+  requireAuth,
+  wrap(async (req, res) => {
+    const ws = req.ctx!.workspaceId;
+    const rows = await q<any>(
+      `select c.called_at, c.direction, c.from_number, c.to_number,
+              coalesce(l.business_name,'') as business, coalesce(c.outcome,'') as outcome,
+              c.status, c.duration_sec, coalesce(c.answered_by,'') as answered_by,
+              coalesce(s.name,'') as session_name, coalesce(c.notes,'') as notes
+         from call_logs c
+         left join leads l on l.id = c.lead_id
+         left join calling_sessions s on s.id = c.session_id
+        where c.workspace_id=$1
+        order by c.called_at desc
+        limit 100000`,
+      [ws],
+    );
+
+    const head = ['called_at', 'direction', 'from', 'to', 'business', 'outcome', 'status', 'duration_sec', 'answered_by', 'session', 'notes'];
+    const esc = (v: any) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [head.join(',')];
+    for (const r of rows) {
+      lines.push(
+        [r.called_at, r.direction, r.from_number, r.to_number, r.business, r.outcome, r.status, r.duration_sec, r.answered_by, r.session_name, r.notes]
+          .map(esc)
+          .join(','),
+      );
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="calls-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(lines.join('\n'));
+  }),
+);
+
 callsRouter.get(
   '/:id',
   requireAuth,

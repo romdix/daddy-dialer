@@ -286,6 +286,16 @@ export function SessionDialer() {
   return (
     <div>
       <PageHeader title={data.session.name} sub={`Queue ${leads.length} leads · ${done} dialed`}>
+        <button
+          className="btn-ghost !py-1.5 text-xs"
+          onClick={async () => {
+            const next = data.session.status === 'paused' ? 'active' : 'paused';
+            await api.patch(`/api/sessions/${id}`, { status: next }).catch(() => {});
+            refetch();
+          }}
+        >
+          {data.session.status === 'paused' ? 'Resume session' : 'Pause session'}
+        </button>
         <button className="btn-ghost !py-1.5 text-xs" onClick={() => nav('/sessions')}>
           Back
         </button>
