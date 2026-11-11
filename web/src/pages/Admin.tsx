@@ -1492,6 +1492,9 @@ function LeadPool() {
   const [users, setUsers] = useState<any[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [qty, setQty] = useState(100);
+  const [fCity, setFCity] = useState('');
+  const [fState, setFState] = useState('');
+  const [fSearch, setFSearch] = useState('');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -1611,6 +1614,34 @@ function LeadPool() {
             ))}
           </select>
         </div>
+
+        <div>
+          <Label>City contains</Label>
+          <input
+            className="field !w-32 !py-1.5 text-xs"
+            placeholder="any"
+            value={fCity}
+            onChange={(e) => setFCity(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label>State</Label>
+          <input
+            className="field !w-20 !py-1.5 text-xs"
+            placeholder="any"
+            value={fState}
+            onChange={(e) => setFState(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label>Name / phone contains</Label>
+          <input
+            className="field !w-40 !py-1.5 text-xs"
+            placeholder="any"
+            value={fSearch}
+            onChange={(e) => setFSearch(e.target.value)}
+          />
+        </div>
         <div>
           <Label>Assign to</Label>
           <select className="field !w-56 !py-1.5 text-xs" value={target} onChange={(e) => setTarget(e.target.value)}>
@@ -1622,7 +1653,16 @@ function LeadPool() {
             ))}
           </select>
         </div>
-        <button className="btn-primary !py-2 text-xs" disabled={busy || !target} onClick={() => assign({ limit: qty }, `Assigned ${qty}`)}>
+        <button
+          className="btn-primary !py-2 text-xs"
+          disabled={busy || !target}
+          onClick={() =>
+            assign(
+              { limit: qty, filters: { city: fCity, state: fState, search: fSearch } },
+              `Assigned ${qty}`,
+            )
+          }
+        >
           Assign {qty}
         </button>
         {selected.length > 0 && (
@@ -1993,6 +2033,8 @@ function CrmPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [pullLimit, setPullLimit] = useState(50);
+  const [pullQuery, setPullQuery] = useState('');
+  const [pullRestart, setPullRestart] = useState(false);
   const [pullTo, setPullTo] = useState('');
   const [pullMsg, setPullMsg] = useState<string | null>(null);
 
@@ -2056,8 +2098,17 @@ function CrmPage() {
     setBusy(true);
     setPullMsg(null);
     try {
-      const r = await post('/api/admin/crm/pull', { limit: pullLimit, userId: pullTo || undefined });
-      setPullMsg(`${r.created} new leads added · ${r.duplicates} already had that number · ${r.invalid} without a phone`);
+      const r = await post('/api/admin/crm/pull', {
+        amount: pullLimit,
+        query: pullQuery,
+        restart: pullRestart,
+        userId: pullTo || undefined,
+      });
+      setPullMsg(
+        `${r.created} new leads · ${r.duplicates} already had that number · ${r.invalid} without a phone` +
+          (r.uploadName ? ` · saved as "${r.uploadName}"` : '') +
+          (r.atEnd ? ' · end of the GoHighLevel list, next pull starts over' : ''),
+      );
     } catch (e: any) {
       setPullMsg(e?.message || 'Pull failed');
     } finally {
@@ -2183,13 +2234,23 @@ function CrmPage() {
           <div className="mt-3 space-y-3">
             <div>
               <Label>How many</Label>
-              <select className="field" value={pullLimit} onChange={(e) => setPullLimit(Number(e.target.value))}>
-                {[25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n} contacts
-                  </option>
-                ))}
-              </select>
+              <input
+                className="field mono"
+                type="number"
+                min={1}
+                max={1000}
+                value={pullLimit}
+                onChange={(e) => setPullLimit(Number(e.target.value) || 50)}
+              />
+            </div>
+            <div>
+              <Label>Search in GoHighLevel (optional)</Label>
+              <input
+                className="field"
+                value={pullQuery}
+                onChange={(e) => setPullQuery(e.target.value)}
+                placeholder="name, phone or email"
+              />
             </div>
             <div>
               <Label>Assign them to</Label>
@@ -2202,6 +2263,15 @@ function CrmPage() {
                 ))}
               </select>
             </div>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="accent-check"
+                checked={pullRestart}
+                onChange={(e) => setPullRestart(e.target.checked)}
+              />
+              start from the beginning again
+            </label>
             <button className="btn-primary !py-2 text-xs" onClick={pull} disabled={busy || !st?.configured}>
               Pull from GoHighLevel
             </button>

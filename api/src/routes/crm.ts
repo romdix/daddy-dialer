@@ -53,7 +53,7 @@ crmRouter.put(
   }),
 );
 
-/** Contacts pulled from GoHighLevel become unassigned leads (or go straight to a rep). */
+/** Contacts pulled from GoHighLevel become a named upload batch in the pool. */
 crmRouter.post(
   '/pull',
   wrap(async (req, res) => {
@@ -61,25 +61,83 @@ crmRouter.post(
     const cfg = await loadGhl(ws);
     if (!cfg) return res.status(400).json({ error: 'Connect GoHighLevel first' });
 
-    const limit = Math.min(100, Math.max(1, Number(req.body?.limit) || 50));
+    const amount = Math.min(1000, Math.max(1, Number(req.body?.amount) || 50));
+    const query = String(req.body?.query || '').trim();
+    const restart = req.body?.restart === true;
     const assignTo = req.body?.userId ? String(req.body.userId) : null;
     if (assignTo) {
       const u = await one(`select id from users where id=$1 and deleted_at is null`, [assignTo]);
       if (!u) return res.status(404).json({ error: 'User not found' });
     }
 
-    let contacts: any[];
-    try {
-      contacts = await listContacts(cfg, limit);
-    } catch (e: any) {
-      return res.status(502).json({ error: e?.message || 'GoHighLevel refused the request' });
+    // Each pull continues where the last one stopped, so pressing 50 twice does
+    // not hand back the same 50 contacts.
+    const st = await one<any>(`select ghl_cursor_id from settings where workspace_id=$1`, [ws]);
+    let cursor: string | null = restart ? null : st?.ghl_cursor_id || null;
+
+    const collected: any[] = [];
+    let atEnd = false;
+    let pages = 0;
+
+    while (collected.length < amount && pages < 12) {
+      pages++;
+      const want = Math.min(100, amount - collected.length);
+      let batch: any[];
+      try {
+        batch = await listContacts(cfg, { limit: want, startAfterId: cursor, query });
+      } catch (e: any) {
+        return res.status(502).json({ error: e?.message || 'GoHighLevel refused the request' });
+      }
+
+      if (!batch.length) {
+        atEnd = true;
+        break;
+      }
+      // Some accounts ignore the cursor; refuse to loop on the same page.
+      if (collected.length && cursor && batch[0]?.id === collected[collected.length - 1]?.id) {
+        atEnd = true;
+        break;
+      }
+
+      collected.push(...batch);
+      cursor = batch[batch.length - 1]?.id || cursor;
+      if (batch.length < want) {
+        atEnd = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 120));
     }
+
+    // At the end of the list the pointer resets, so the next pull starts a fresh
+    // pass (existing numbers are skipped, never duplicated).
+    await q(`update settings set ghl_cursor_id=$2, ghl_cursor_at=now() where workspace_id=$1`, [
+      ws,
+      atEnd ? null : cursor,
+    ]);
+
+    if (!collected.length) {
+      return res.json({ created: 0, duplicates: 0, invalid: 0, received: 0, atEnd: true, uploadName: null });
+    }
+
+    const stamp = new Date().toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const uploadName = `GoHighLevel — ${stamp} — ${collected.length} contacts`;
+    const up = await one<{ id: string }>(
+      `insert into lead_uploads (workspace_id, filename, total) values ($1,$2,0) returning id`,
+      [ws, uploadName],
+    );
 
     let created = 0;
     let duplicates = 0;
     let invalid = 0;
 
-    for (const c of contacts) {
+    for (const c of collected) {
       const norm = normalizePhone(String(c.phone || c.phoneNumber || ''));
       if (!norm) {
         invalid++;
@@ -87,14 +145,15 @@ crmRouter.post(
       }
       const name = String(c.companyName || c.businessName || c.name || '').trim().slice(0, 300) || null;
       const row = await one(
-        `insert into leads (workspace_id, assigned_user_id, business_name, phone, phone_norm,
+        `insert into leads (workspace_id, assigned_user_id, upload_id, business_name, phone, phone_norm,
                             address, city, state, zip, email, ghl_contact_id, metadata)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          on conflict (workspace_id, phone_norm) do nothing
          returning id`,
         [
           ws,
           assignTo,
+          up!.id,
           name,
           formatPhone(norm),
           norm,
@@ -111,7 +170,17 @@ crmRouter.post(
       else duplicates++;
     }
 
-    res.json({ created, duplicates, invalid, received: contacts.length });
+    await q(`update lead_uploads set total=$2 where id=$1`, [up!.id, created]);
+
+    res.json({
+      created,
+      duplicates,
+      invalid,
+      received: collected.length,
+      atEnd,
+      uploadName: created ? uploadName : null,
+      uploadId: created ? up!.id : null,
+    });
   }),
 );
 

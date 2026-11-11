@@ -81,8 +81,14 @@ export async function pushContact(cfg: GhlConfig, lead: any): Promise<{ id: stri
   }
 }
 
-export async function listContacts(cfg: GhlConfig, limit = 100): Promise<any[]> {
-  const params = new URLSearchParams({ locationId: cfg.locationId, limit: String(Math.min(100, Math.max(1, limit))) });
+export async function listContacts(
+  cfg: GhlConfig,
+  opts: { limit?: number; startAfterId?: string | null; query?: string } = {},
+): Promise<any[]> {
+  const limit = Math.min(100, Math.max(1, opts.limit || 50));
+  const params = new URLSearchParams({ locationId: cfg.locationId, limit: String(limit) });
+  if (opts.startAfterId) params.set('startAfterId', opts.startAfterId);
+  if (opts.query && opts.query.trim()) params.set('query', opts.query.trim());
   const data = await ghlFetch(cfg, `/contacts/?${params}`);
   return Array.isArray(data?.contacts) ? data.contacts : [];
 }

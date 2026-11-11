@@ -255,6 +255,9 @@ poolRouter.post(
     const uploadId = req.body?.uploadId ? String(req.body.uploadId) : '';
     const limit = Math.max(1, Math.min(100000, Number(req.body?.limit) || 0));
 
+    // Optional conditions, so "assign 200 from the pool" can mean "the ones in
+    // Austin that have not been called yet".
+    const f = req.body?.filters || {};
     const params: any[] = [ws];
     const parts: string[] = ['workspace_id = $1', 'assigned_user_id is null'];
     if (uploadId) {
@@ -265,6 +268,23 @@ poolRouter.post(
       params.push(ids);
       parts.push(`id = any($${params.length}::uuid[])`);
     }
+    if (f.city) {
+      params.push(`%${String(f.city).trim()}%`);
+      parts.push(`city ilike $${params.length}`);
+    }
+    if (f.state) {
+      params.push(String(f.state).trim());
+      parts.push(`upper(state) = upper($${params.length})`);
+    }
+    if (f.search) {
+      params.push(`%${String(f.search).trim()}%`);
+      parts.push(`(business_name ilike $${params.length} or phone ilike $${params.length})`);
+    }
+    if (f.outcome) {
+      params.push(String(f.outcome));
+      parts.push(`outcome = $${params.length}`);
+    }
+    if (f.neverCalled) parts.push('last_called_at is null');
     params.push(userId);
     const userIdx = params.length;
 
