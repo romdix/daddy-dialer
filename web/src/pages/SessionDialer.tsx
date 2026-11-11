@@ -179,23 +179,28 @@ export function SessionDialer() {
     [advance, qc],
   );
 
-  // A call finished: work out what actually happened, then either auto-move on
-  // (no answer / busy) or ask the rep for a disposition (a real conversation).
+  // A call finished: decide what happened, then always offer the disposition.
+  // Only a call that never connected is logged for the rep automatically.
   useEffect(() => {
     const le = dialer.lastEnded;
-    if (!le || le.sessionId !== id || !le.callLogId) return;
+    if (!le || !le.callLogId) return;
+    if (le.sessionId && le.sessionId !== id) return;
 
     let cancelled = false;
     (async () => {
       const row = await api.get<any>(`/api/calls/${le.callLogId}`).catch(() => null);
       if (cancelled) return;
+      // The call must belong to this session — by the client's own record, or
+      // by the server's if the client lost it.
+      const belongs = le.sessionId ? le.sessionId === id : row?.session_id === id;
+      if (!belongs) return;
 
       const status = row?.status || '';
       const durationSec = Number(row?.duration_sec || le.durationSec || 0);
-      // A voicemail detected by the server arrives with the outcome already set,
-      // so there is nothing to ask the rep.
+      // Talking at all means a conversation, even if the row has no duration yet.
+      const connected = Boolean(row?.connected_at) || durationSec > 0;
       const existingOutcome = row?.outcome || null;
-      const auto = Boolean(existingOutcome) || (durationSec <= 0 && Boolean(AUTO_OUTCOME[status]));
+      const autoOutcome = !connected && AUTO_OUTCOME[status] ? AUTO_OUTCOME[status] : null;
       const leadIndex = leadsRef.current.findIndex((l) => l.id === le.leadId);
 
       const info: EndedCall = {
@@ -205,20 +210,13 @@ export function SessionDialer() {
         status,
         durationSec,
         outcome: existingOutcome,
-        auto,
+        auto: Boolean(autoOutcome) && !existingOutcome,
       };
       setEnded(info);
 
-      if (auto) {
-        if (!existingOutcome) {
-          await api.patch(`/api/calls/${le.callLogId}/outcome`, { outcome: AUTO_OUTCOME[status] }).catch(() => {});
-        }
-        setEnded(null);
-        if (autoDialRef.current) {
-          await advance(info.leadIndex);
-        } else {
-          await refetch();
-        }
+      if (info.auto && autoOutcome) {
+        await api.patch(`/api/calls/${le.callLogId}/outcome`, { outcome: autoOutcome }).catch(() => {});
+        if (autoDialRef.current) await advance(info.leadIndex);
       }
     })();
 
@@ -478,6 +476,7 @@ export function SessionDialer() {
                 <p className="text-xs uppercase tracking-wider text-muted">How did it go?</p>
                 <span className="mono text-2xs text-muted">
                   {fmtDuration(ended.durationSec)} · {ended.status.replace('_', ' ')}
+                  {ended.outcome ? ` · detected: ${OUTCOME_LABEL[ended.outcome] || ended.outcome}` : ''}
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -485,7 +484,9 @@ export function SessionDialer() {
                   <button
                     key={o}
                     onClick={() => dispose(o)}
-                    className={`rounded border px-2.5 py-1.5 text-xs hover:brightness-125 ${outcomeColor(o)}`}
+                    className={`rounded border px-2.5 py-1.5 text-xs hover:brightness-125 ${outcomeColor(o)} ${
+                      ended.outcome === o ? 'ring-1 ring-accent' : ''
+                    }`}
                   >
                     <span className="mono mr-1 text-2xs opacity-60">{i + 1}</span>
                     {OUTCOME_LABEL[o]}
@@ -510,13 +511,15 @@ export function SessionDialer() {
           {ended && ended.auto && (
             <div className="panel border-ink-700 p-4 text-xs text-muted">
               <span className="text-zinc-300">
-                {ended.outcome === 'voicemail'
-                  ? 'Voicemail detected'
-                  : ended.status === 'busy'
-                    ? 'Line was busy'
-                    : 'No answer'}
+                {ended.status === 'busy' ? 'Line was busy' : 'No answer'}
               </span>{' '}
               — logged as <span className="mono">{ended.outcome || AUTO_OUTCOME[ended.status]}</span>.
+              <button
+                className="ml-2 underline hover:text-zinc-300"
+                onClick={() => setEnded({ ...ended, auto: false })}
+              >
+                Change outcome
+              </button>
               <button className="ml-2 underline hover:text-zinc-300" onClick={() => advance(ended.leadIndex)}>
                 Next
               </button>
