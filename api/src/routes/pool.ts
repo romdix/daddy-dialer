@@ -123,6 +123,7 @@ poolRouter.get(
          left join leads l on l.upload_id = up.id
         where up.workspace_id = $1
         group by up.id
+        having count(l.id) > 0
         order by up.created_at desc
         limit 200`,
       [ws],

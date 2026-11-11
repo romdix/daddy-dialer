@@ -179,7 +179,9 @@ crmRouter.post(
     }
 
     const tot = await one<{ n: number }>(`select count(*)::int as n from leads where upload_id=$1`, [up!.id]);
-    await q(`update lead_uploads set total=$2 where id=$1`, [up!.id, tot?.n || created]);
+    const inBatch = tot?.n || 0;
+    if (inBatch === 0) await q(`delete from lead_uploads where id=$1`, [up!.id]);
+    else await q(`update lead_uploads set total=$2 where id=$1`, [up!.id, inBatch]);
 
     res.json({
       created,
@@ -187,8 +189,8 @@ crmRouter.post(
       invalid,
       received: collected.length,
       atEnd,
-      uploadName: (tot?.n || created) ? uploadName : null,
-      uploadId: (tot?.n || created) ? up!.id : null,
+      uploadName: inBatch ? uploadName : null,
+      uploadId: inBatch ? up!.id : null,
     });
   }),
 );
