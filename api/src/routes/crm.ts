@@ -167,10 +167,19 @@ crmRouter.post(
         ],
       );
       if (row) created++;
-      else duplicates++;
+      else {
+        duplicates++;
+        // Already in the lead list: attach it to this batch (keeping an older file if it has one)
+        await q(
+          `update leads set upload_id = coalesce(upload_id, $3), ghl_contact_id = coalesce(ghl_contact_id, $4)
+            where workspace_id=$1 and phone_norm=$2`,
+          [ws, norm, up!.id, c.id || null],
+        );
+      }
     }
 
-    await q(`update lead_uploads set total=$2 where id=$1`, [up!.id, created]);
+    const tot = await one<{ n: number }>(`select count(*)::int as n from leads where upload_id=$1`, [up!.id]);
+    await q(`update lead_uploads set total=$2 where id=$1`, [up!.id, tot?.n || created]);
 
     res.json({
       created,
