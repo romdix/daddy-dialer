@@ -80,12 +80,24 @@ async function pickCallerId(
   fallback: string | null,
   preferred?: string,
   leadPhone?: string,
+  userId?: string | null,
 ): Promise<string | null> {
+  // A rep only gets the numbers the admin handed them. No assignments = all.
+  const allowed = userId
+    ? (
+        await q<{ caller_id_id: string }>(`select caller_id_id from caller_id_users where user_id=$1`, [userId])
+      ).map((r) => r.caller_id_id)
+    : [];
+  const allowSql = (i: number) => `($${i}::uuid[] = '{}' or id = any($${i}::uuid[]))`;
+
   if (preferred) {
     const norm = normalizePhone(preferred);
     if (norm) {
       const want = toE164(norm);
-      const hit = await one<any>(`select number from caller_ids where workspace_id=$1 and number=$2 and active`, [ws, want]);
+      const hit = await one<any>(
+        `select number from caller_ids where workspace_id=$1 and number=$2 and active and ${allowSql(3)}`,
+        [ws, want, allowed],
+      );
       if (hit) {
         await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, hit.number]);
         return hit.number;
@@ -100,10 +112,10 @@ async function pickCallerId(
   if (settings?.local_presence_enabled !== false && ac) {
     const local = await one<any>(
       `select number from caller_ids
-        where workspace_id=$1 and active and number like $2
+        where workspace_id=$1 and active and number like $2 and ${allowSql(3)}
         order by last_used_at asc nulls first, created_at asc
         limit 1`,
-      [ws, `+1${ac}%`],
+      [ws, `+1${ac}%`, allowed],
     );
     if (local) {
       await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, local.number]);
@@ -113,10 +125,10 @@ async function pickCallerId(
 
   const next = await one<any>(
     `select number from caller_ids
-      where workspace_id=$1 and active
+      where workspace_id=$1 and active and ${allowSql(2)}
       order by last_used_at asc nulls first, created_at asc
       limit 1`,
-    [ws],
+    [ws, allowed],
   );
   if (next) {
     await q(`update caller_ids set last_used_at=now() where workspace_id=$1 and number=$2`, [ws, next.number]);
@@ -210,7 +222,7 @@ voiceRouter.post(
     const numbers = p.numbers(s);
 
     // Pick the caller ID first (explicit choice or rotation), then fall back.
-    const fromNumber = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), toE164(norm));
+    const fromNumber = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), toE164(norm), req.ctx!.userId);
     if (!fromNumber) throw Object.assign(new Error('No caller ID number saved in Settings'), { status: 400 });
 
     const row = await one<any>(
@@ -1010,7 +1022,7 @@ voiceRouter.post(
       }
 
       const to = toE164(norm);
-      const from = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), to);
+      const from = await pickCallerId(ws, numbers[0] || null, String(req.body?.callerId || ''), to, req.ctx!.userId);
       const row = await one<any>(
         `insert into call_logs (workspace_id, lead_id, session_id, provider, from_number, to_number, status, called_at, batch_id, user_id)
          values ($1,$2,$3,$4,$5,$6,'queued',now(),$7,$8) returning id`,

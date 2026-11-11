@@ -872,6 +872,35 @@ function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [callerIds, setCallerIds] = useState<string[]>([]);
+  const [numbers, setNumbers] = useState<any[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+
+  useEffect(() => {
+    j(`/api/admin/users/${user.id}/caller-ids`)
+      .then((d: any) => {
+        const rows = d.rows || [];
+        setNumbers(rows);
+        setPicked(rows.filter((r: any) => r.assigned).map((r: any) => r.id));
+      })
+      .catch(() => {});
+  }, [user.id]);
+
+  const saveNumbers = async () => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      await j(`/api/admin/users/${user.id}/caller-ids`, {
+        method: 'PUT',
+        body: JSON.stringify({ callerIds: picked }),
+      });
+      setMsg('Caller IDs updated');
+      onSaved();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     j('/api/caller-ids')
@@ -932,20 +961,46 @@ function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
 
         <div className="mt-3 space-y-3">
           <div>
-            <label className="label">Caller ID</label>
-            <select
-              className="field"
-              value={user.callerId || ''}
-              onChange={(e) => save({ callerId: e.target.value }, 'Caller ID updated')}
-              disabled={saving}
-            >
-              <option value="">Team default (rotate)</option>
-              {callerIds.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
+            <label className="label">Numbers this user can call from</label>
+            <p className="mb-2 text-2xs text-muted">
+              Tick any combination. Nothing ticked means they can use every active number.
+            </p>
+            <div className="space-y-1.5">
+              {numbers.map((n) => (
+                <label key={n.id} className="flex items-center gap-2 text-xs text-zinc-300">
+                  <input
+                    type="checkbox"
+                    className="accent-check"
+                    checked={picked.includes(n.id)}
+                    onChange={(e) =>
+                      setPicked(e.target.checked ? [...picked, n.id] : picked.filter((x) => x !== n.id))
+                    }
+                  />
+                  <span className="mono">{n.number}</span>
+                  {n.label && <span className="text-muted">— {n.label}</span>}
+                  {n.active === false && <span className="text-2xs text-amber-300">(switched off)</span>}
+                </label>
               ))}
-            </select>
+              {numbers.length === 0 && (
+                <p className="text-2xs text-muted">
+                  No numbers yet — add them in Admin → Settings → Caller IDs.
+                </p>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                className="btn-ghost !py-1 text-2xs"
+                onClick={() => setPicked(numbers.filter((n) => n.active !== false).map((n) => n.id))}
+              >
+                All
+              </button>
+              <button className="btn-ghost !py-1 text-2xs" onClick={() => setPicked([])}>
+                None
+              </button>
+              <button className="btn-primary !py-1 text-2xs" disabled={saving} onClick={saveNumbers}>
+                Save numbers
+              </button>
+            </div>
           </div>
 
           <div>

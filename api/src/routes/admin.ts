@@ -686,7 +686,48 @@ adminRouter.get(
   }),
 );
 
-/** Numbers the admin can hand out as caller IDs, for the per-user setting. */
+/* ------------------------------------------------------------------ *
+ * Caller IDs per user
+ * ------------------------------------------------------------------ */
+
+adminRouter.get(
+  '/users/:id/caller-ids',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const rows = await q(
+      `select c.id, c.number, c.label, c.active,
+              exists(select 1 from caller_id_users cu where cu.caller_id_id=c.id and cu.user_id=$2) as assigned
+         from caller_ids c
+        where c.workspace_id=$1
+        order by c.created_at asc`,
+      [ws, req.params.id],
+    );
+    res.json({ rows });
+  }),
+);
+
+adminRouter.put(
+  '/users/:id/caller-ids',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const ids: string[] = Array.isArray(req.body?.callerIds) ? req.body.callerIds.filter(Boolean) : [];
+    const u = await one(`select id from users where id=$1 and deleted_at is null`, [req.params.id]);
+    if (!u) return res.status(404).json({ error: 'User not found' });
+
+    await tx(async (c) => {
+      await c.query(`delete from caller_id_users where user_id=$1`, [req.params.id]);
+      for (const id of ids) {
+        await c.query(
+          `insert into caller_id_users (caller_id_id, user_id)
+           select id, $2 from caller_ids where id=$1 and workspace_id=$3
+           on conflict do nothing`,
+          [id, req.params.id, ws],
+        );
+      }
+    });
+    res.json({ ok: true, count: ids.length });
+  }),
+);
 adminRouter.get(
   '/caller-ids',
   wrap(async (_req, res) => {
