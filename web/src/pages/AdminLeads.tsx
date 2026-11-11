@@ -337,7 +337,7 @@ export function AdminSessions() {
                 <td className="td text-2xs text-zinc-400">{s.status}</td>
                 <td className="td text-right whitespace-nowrap">
                   <button className="btn-ghost !px-2 !py-1 text-2xs" onClick={() => setOpen(s)}>View</button>
-                  <a className="btn-ghost !px-2 !py-1 text-2xs" href={`/api/admin/hub/sessions/${s.id}.csv`} download>
+                  <a className="btn-ghost !px-2 !py-1 text-2xs" href={`/api/admin/hub/sessions/${s.id}/export.csv`} download>
                     CSV
                   </a>
                 </td>
@@ -359,7 +359,7 @@ export function AdminSessions() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <a className="btn-ghost !py-1.5 text-xs" href={`/api/admin/hub/sessions/${open.id}.csv`} download>
+                <a className="btn-ghost !py-1.5 text-xs" href={`/api/admin/hub/sessions/${open.id}/export.csv`} download>
                   Export CSV
                 </a>
                 <button className="btn-ghost !py-1.5 text-xs" onClick={() => setOpen(null)}>Close</button>

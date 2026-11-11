@@ -230,7 +230,7 @@ hubRouter.get(
 );
 
 hubRouter.get(
-  '/sessions/:id.csv',
+  '/sessions/:id/export.csv',
   wrap(async (req, res) => {
     const ws = await primaryWorkspaceId();
     const rows = await q<any>(
