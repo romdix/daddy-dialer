@@ -26,6 +26,10 @@ create table if not exists caller_id_users (
 
 create index if not exists caller_id_users_user on caller_id_users (user_id);
 
+-- A masked number (from a settings screen that shows +134****4804) is unusable
+-- as a caller ID: Twilio rejects it. Drop those and re-seed the real one below.
+delete from caller_ids where number like '%*%' or number like '%•%';
+
 -- Seed from whatever is already configured so existing installs keep working.
 insert into caller_ids (workspace_id, number)
 select workspace_id, twilio_number
