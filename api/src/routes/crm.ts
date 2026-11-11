@@ -5,6 +5,7 @@ import { requireAdmin } from '../adminauth';
 import { primaryWorkspaceId } from '../workspace';
 import { enc, dec } from '../crypto';
 import { loadGhl, pushContact, listContacts } from '../ghl';
+import { pullFromGhl } from '../ghlpull';
 import { normalizePhone, formatPhone } from '../filters';
 
 export const crmRouter = Router();
@@ -53,9 +54,97 @@ crmRouter.put(
   }),
 );
 
-/** Contacts pulled from GoHighLevel become a named upload batch in the pool. */
 crmRouter.post(
   '/pull',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const b = req.body || {};
+    const assignTo = b.userId ? String(b.userId) : null;
+    if (assignTo) {
+      const u = await one(`select id from users where id=$1 and deleted_at is null`, [assignTo]);
+      if (!u) return res.status(404).json({ error: 'User not found' });
+    }
+    try {
+      const r = await pullFromGhl(ws, {
+        amount: b.amount,
+        query: b.query,
+        restart: b.restart === true,
+        state: b.state,
+        city: b.city,
+        assignTo,
+        useTag: b.useTag !== false,
+      });
+      res.json(r);
+    } catch (e: any) {
+      res.status(e?.status || 500).json({ error: e?.message || 'Pull failed' });
+    }
+  }),
+);
+
+crmRouter.get(
+  '/sync',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const s = await one<any>(
+      `select ghl_sync_enabled, ghl_sync_tag, ghl_sync_hour, ghl_sync_amount,
+              ghl_skip_recent_days, ghl_last_sync_at, ghl_cursor_at
+         from settings where workspace_id=$1`,
+      [ws],
+    );
+    res.json({
+      enabled: Boolean(s?.ghl_sync_enabled),
+      tag: s?.ghl_sync_tag || 'dialer-imported',
+      hour: Number(s?.ghl_sync_hour ?? 6),
+      amount: Number(s?.ghl_sync_amount ?? 100),
+      skipRecentDays: Number(s?.ghl_skip_recent_days ?? 90),
+      lastSyncAt: s?.ghl_last_sync_at || null,
+      cursorAt: s?.ghl_cursor_at || null,
+    });
+  }),
+);
+
+crmRouter.put(
+  '/sync',
+  wrap(async (req, res) => {
+    const ws = await primaryWorkspaceId();
+    const b = req.body || {};
+    const sets: string[] = [];
+    const params: any[] = [ws];
+    let i = 2;
+    const push = (col: string, v: any) => {
+      sets.push(`${col}=$${i++}`);
+      params.push(v);
+    };
+    if (typeof b.enabled === 'boolean') push('ghl_sync_enabled', b.enabled);
+    if (typeof b.tag === 'string' && b.tag.trim()) push('ghl_sync_tag', b.tag.trim().slice(0, 60));
+    if (b.hour !== undefined) push('ghl_sync_hour', Math.max(0, Math.min(23, Number(b.hour) || 0)));
+    if (b.amount !== undefined) push('ghl_sync_amount', Math.max(1, Math.min(1000, Number(b.amount) || 100)));
+    if (b.skipRecentDays !== undefined) {
+      push('ghl_skip_recent_days', Math.max(0, Math.min(3650, Number(b.skipRecentDays) || 0)));
+    }
+    if (sets.length) await q(`update settings set ${sets.join(', ')} where workspace_id=$1`, params);
+    res.json({ ok: true });
+  }),
+);
+
+crmRouter.post(
+  '/sync/run',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const s = await one<any>(`select ghl_sync_amount from settings where workspace_id=$1`, [ws]);
+    try {
+      const r = await pullFromGhl(ws, { amount: s?.ghl_sync_amount || 100, label: 'Nightly top-up' });
+      await q(`update settings set ghl_last_sync_at=now() where workspace_id=$1`, [ws]);
+      res.json(r);
+    } catch (e: any) {
+      res.status(e?.status || 500).json({ error: e?.message || 'Top-up failed' });
+    }
+  }),
+);
+
+/** Deprecated: the old inline pull, superseded by pullFromGhl above. */
+crmRouter.post(
+  '/pull-legacy',
   wrap(async (req, res) => {
     const ws = await primaryWorkspaceId();
     const cfg = await loadGhl(ws);

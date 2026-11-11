@@ -21,6 +21,7 @@ import { poolRouter } from './routes/pool';
 import { outcomesRouter, adminOutcomesRouter } from './routes/outcomes';
 import { crmRouter } from './routes/crm';
 import { hubRouter } from './routes/hub';
+import { startGhlSync } from './sync';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -49,6 +50,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/brand', brandRouter);
 app.use('/api/caller-ids', callerIdsRouter);
 app.use('/api/admin/hub', hubRouter);
+startGhlSync();
 app.use('/api/admin/crm', crmRouter);
 app.use('/api/admin/outcomes', adminOutcomesRouter);
 app.use('/api/outcomes', outcomesRouter);

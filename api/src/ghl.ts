@@ -81,6 +81,14 @@ export async function pushContact(cfg: GhlConfig, lead: any): Promise<{ id: stri
   }
 }
 
+/** Put a tag on a contact — the bookmark that stops us re-importing them. */
+export async function addContactTag(cfg: GhlConfig, contactId: string, tag: string): Promise<void> {
+  await ghlFetch(cfg, `/contacts/${contactId}/tags`, {
+    method: 'POST',
+    body: JSON.stringify({ tags: [tag] }),
+  });
+}
+
 export async function listContacts(
   cfg: GhlConfig,
   opts: { limit?: number; startAfterId?: string | null; query?: string } = {},

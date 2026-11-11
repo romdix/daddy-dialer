@@ -2041,6 +2041,11 @@ function CrmPage() {
   const [pullRestart, setPullRestart] = useState(false);
   const [pullTo, setPullTo] = useState('');
   const [pullMsg, setPullMsg] = useState<string | null>(null);
+  const [pullState, setPullState] = useState('');
+  const [pullCity, setPullCity] = useState('');
+  const [pullUseTag, setPullUseTag] = useState(true);
+  const [sync, setSync] = useState<any>(null);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const loadStatus = useCallback(() => {
     j('/api/admin/crm/status')
@@ -2058,6 +2063,7 @@ function CrmPage() {
     j('/api/admin/users').then((d) => setUsers(d.rows || [])).catch(() => {});
     j('/api/admin/sessions').then((d) => setSessions(d.rows || [])).catch(() => {});
     j('/api/admin/outcomes').then((d) => setTags(d.rows || [])).catch(() => {});
+    j('/api/admin/crm/sync').then(setSync).catch(() => {});
   }, [loadStatus]);
 
   const saveConn = async () => {
@@ -2107,14 +2113,64 @@ function CrmPage() {
         query: pullQuery,
         restart: pullRestart,
         userId: pullTo || undefined,
+        state: pullState,
+        city: pullCity,
+        useTag: pullUseTag,
       });
+      const bits = [`${r.created} new leads`, `${r.duplicates} already had that number`];
+      if (r.skippedTagged) bits.push(`${r.skippedTagged} imported before`);
+      if (r.skippedRecent) bits.push(`${r.skippedRecent} called recently`);
+      if (r.skippedDnc) bits.push(`${r.skippedDnc} do-not-call`);
+      if (r.skippedArea) bits.push(`${r.skippedArea} outside that area`);
+      if (r.invalid) bits.push(`${r.invalid} without a phone`);
       setPullMsg(
-        `${r.created} new leads · ${r.duplicates} already had that number · ${r.invalid} without a phone` +
+        bits.join(' · ') +
           (r.uploadName ? ` · saved as "${r.uploadName}"` : '') +
-          (r.atEnd ? ' · end of the GoHighLevel list, next pull starts over' : ''),
+          (r.tagged ? ` · tagging ${r.tagged} in GoHighLevel` : '') +
+          (r.atEnd ? ' · end of the list, next pull starts over' : ''),
       );
     } catch (e: any) {
       setPullMsg(e?.message || 'Pull failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSync = async () => {
+    setBusy(true);
+    setSyncMsg(null);
+    try {
+      await j('/api/admin/crm/sync', {
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: Boolean(sync?.enabled),
+          tag: sync?.tag,
+          hour: Number(sync?.hour ?? 6),
+          amount: Number(sync?.amount ?? 100),
+          skipRecentDays: Number(sync?.skipRecentDays ?? 90),
+        }),
+      });
+      setSyncMsg('Saved');
+      setSync(await j('/api/admin/crm/sync'));
+    } catch (e: any) {
+      setSyncMsg(e?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runSync = async () => {
+    setBusy(true);
+    setSyncMsg(null);
+    try {
+      const r = await post('/api/admin/crm/sync/run');
+      setSyncMsg(
+        `${r.created} new, ${r.duplicates} already had` +
+          (r.uploadName ? ` — ${r.uploadName}` : ' — nothing new to file'),
+      );
+      setSync(await j('/api/admin/crm/sync'));
+    } catch (e: any) {
+      setSyncMsg(e?.message || 'Top-up failed');
     } finally {
       setBusy(false);
     }
@@ -2257,6 +2313,25 @@ function CrmPage() {
               />
             </div>
             <div>
+              <Label>State (optional)</Label>
+              <input
+                className="field"
+                value={pullState}
+                onChange={(e) => setPullState(e.target.value.toUpperCase())}
+                placeholder="TX"
+                maxLength={2}
+              />
+            </div>
+            <div>
+              <Label>City contains (optional)</Label>
+              <input
+                className="field"
+                value={pullCity}
+                onChange={(e) => setPullCity(e.target.value)}
+                placeholder="any"
+              />
+            </div>
+            <div>
               <Label>Assign them to</Label>
               <select className="field" value={pullTo} onChange={(e) => setPullTo(e.target.value)}>
                 <option value="">My lead pool (unassigned)</option>
@@ -2276,14 +2351,105 @@ function CrmPage() {
               />
               start from the beginning again
             </label>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="accent-check"
+                checked={pullUseTag}
+                onChange={(e) => setPullUseTag(e.target.checked)}
+              />
+              skip contacts already imported (they carry the tag in GoHighLevel)
+            </label>
             <button className="btn-primary !py-2 text-xs" onClick={pull} disabled={busy || !st?.configured}>
               Pull from GoHighLevel
             </button>
             {pullMsg && <p className="text-2xs text-accent">{pullMsg}</p>}
           </div>
           <p className="mt-3 text-2xs text-muted">
-            Phone numbers are matched on the way in, so an existing lead is never duplicated.
+            Phone numbers are matched on the way in, so an existing lead is never duplicated. Contacts already
+            tagged, marked do-not-call, or called recently are skipped before they land.
           </p>
+        </div>
+
+        <div className="panel p-4 lg:col-span-2">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Nightly top-up</h2>
+              <p className="mt-1 text-2xs text-muted">
+                Pulls a small batch every night into a new file, so the pool never runs dry. Off until you switch
+                it on.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="accent-check"
+                checked={Boolean(sync?.enabled)}
+                onChange={(e) => setSync({ ...(sync || {}), enabled: e.target.checked })}
+              />
+              {sync?.enabled ? 'on' : 'off'}
+            </label>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-4">
+            <div>
+              <Label>Hour (New York)</Label>
+              <select
+                className="field !py-1.5 text-xs"
+                value={Number(sync?.hour ?? 6)}
+                onChange={(e) => setSync({ ...(sync || {}), hour: Number(e.target.value) })}
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, '0')}:00
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label>Contacts per night</Label>
+              <input
+                className="field !py-1.5 text-xs mono"
+                type="number"
+                min={1}
+                max={1000}
+                value={Number(sync?.amount ?? 100)}
+                onChange={(e) => setSync({ ...(sync || {}), amount: Number(e.target.value) || 100 })}
+              />
+            </div>
+            <div>
+              <Label>Skip if called within (days)</Label>
+              <input
+                className="field !py-1.5 text-xs mono"
+                type="number"
+                min={0}
+                max={3650}
+                value={Number(sync?.skipRecentDays ?? 90)}
+                onChange={(e) => setSync({ ...(sync || {}), skipRecentDays: Number(e.target.value) || 0 })}
+              />
+            </div>
+            <div>
+              <Label>Tag in GoHighLevel</Label>
+              <input
+                className="field !py-1.5 text-xs mono"
+                value={sync?.tag ?? 'dialer-imported'}
+                onChange={(e) => setSync({ ...(sync || {}), tag: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn-primary !py-2 text-xs" onClick={saveSync} disabled={busy}>
+              Save
+            </button>
+            <button className="btn-ghost !py-2 text-xs" onClick={runSync} disabled={busy || !st?.configured}>
+              Run now
+            </button>
+            {sync?.lastSyncAt && (
+              <span className="text-2xs text-muted">Last run {fmtNY(sync.lastSyncAt)}</span>
+            )}
+            {syncMsg && <span className="text-2xs text-accent">{syncMsg}</span>}
+          </div>
         </div>
       </div>
     </div>
