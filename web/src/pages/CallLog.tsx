@@ -4,6 +4,7 @@ import { api, qs } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { Badge, EmptyState, Pager } from '../components/ui';
 import { OUTCOMES, OUTCOME_LABEL, fmtDateTime, fmtDuration, outcomeColor } from '../lib/format';
+import { useTags } from '../lib/outcomes';
 import { useAuth } from '../lib/auth';
 
 interface CallRow {
@@ -60,6 +61,7 @@ function CallNotes({ call }: { call: CallRow }) {
 export function CallLog() {
   const qc = useQueryClient();
   const { me } = useAuth();
+  const tags = useTags();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [outcome, setOutcome] = useState('all');
@@ -101,9 +103,9 @@ export function CallLog() {
           >
             <option value="all">Any outcome</option>
             <option value="none">No outcome</option>
-            {OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {OUTCOME_LABEL[o]}
+            {tags.rows.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
               </option>
             ))}
           </select>
@@ -194,9 +196,9 @@ export function CallLog() {
                                 onChange={(e) => setOutcomeFor(c.id, e.target.value)}
                               >
                                 <option value="">— none —</option>
-                                {OUTCOMES.map((o) => (
-                                  <option key={o} value={o}>
-                                    {OUTCOME_LABEL[o]}
+                                {tags.rows.map((t) => (
+                                  <option key={t.key} value={t.key}>
+                                    {t.label}
                                   </option>
                                 ))}
                               </select>

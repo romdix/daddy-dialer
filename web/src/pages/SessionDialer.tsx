@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/Shell';
 import { Badge } from '../components/ui';
 import { QUICK_OUTCOMES, OUTCOME_LABEL, fmtDuration, fmtWhen, outcomeColor } from '../lib/format';
+import { useTags } from '../lib/outcomes';
 import { useDialer } from '../lib/dialer';
 import { DialPad } from '../components/DialPad';
 import { PhoneOff } from '../components/PhoneWidget';
@@ -60,6 +61,7 @@ export function SessionDialer() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const dialer = useDialer();
+  const tags = useTags();
 
   const [index, setIndex] = useState(0);
   const [ended, setEnded] = useState<EndedCall | null>(null);
@@ -494,20 +496,20 @@ export function SessionDialer() {
                 <p className="text-xs uppercase tracking-wider text-muted">How did it go?</p>
                 <span className="mono text-2xs text-muted">
                   {fmtDuration(ended.durationSec)} · {ended.status.replace('_', ' ')}
-                  {ended.outcome ? ` · detected: ${OUTCOME_LABEL[ended.outcome] || ended.outcome}` : ''}
+                  {ended.outcome ? ` · detected: ${tags.label(ended.outcome)}` : ''}
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {QUICK_OUTCOMES.map((o, i) => (
+                {tags.rows.map((t, i) => (
                   <button
-                    key={o}
-                    onClick={() => dispose(o)}
-                    className={`rounded border px-2.5 py-1.5 text-xs hover:brightness-125 ${outcomeColor(o)} ${
-                      ended.outcome === o ? 'ring-1 ring-accent' : ''
+                    key={t.key}
+                    onClick={() => dispose(t.key)}
+                    className={`rounded border px-2.5 py-1.5 text-xs hover:brightness-125 ${tags.color(t.key)} ${
+                      ended.outcome === t.key ? 'ring-1 ring-accent' : ''
                     }`}
                   >
                     <span className="mono mr-1 text-2xs opacity-60">{i + 1}</span>
-                    {OUTCOME_LABEL[o]}
+                    {t.label}
                   </button>
                 ))}
               </div>

@@ -3,6 +3,7 @@ import { q, one, tx } from '../db';
 import { requireAuth, requirePerm, wrap } from '../middleware';
 import { buildLeadWhere, normalizePhone, formatPhone, SORTABLE, type LeadFilter } from '../filters';
 import { OUTCOMES, STATUSES } from '../config';
+import { activeOutcomeKeys } from '../outcomes';
 import { checkCallable } from '../compliance';
 
 export const leadsRouter = Router();
@@ -234,6 +235,8 @@ leadsRouter.post(
     const dupe = await one(`select id from leads where workspace_id=$1 and phone_norm=$2`, [ws, norm]);
     if (dupe) return res.status(409).json({ error: 'A lead with that phone number already exists' });
 
+    const allowedTags = await activeOutcomeKeys(ws);
+
     const row = await one(
       `insert into leads (workspace_id, assigned_user_id, business_name, phone, phone_norm,
                           address, city, state, zip, website, email, notes, status, outcome, metadata)
@@ -253,7 +256,7 @@ leadsRouter.post(
         clean(b.email),
         clean(b.notes),
         STATUSES.includes(b.status) ? b.status : 'new',
-        OUTCOMES.includes(b.outcome) ? b.outcome : null,
+        b.outcome && allowedTags.has(String(b.outcome)) ? b.outcome : null,
       ],
     );
     res.json(row);
@@ -297,12 +300,13 @@ leadsRouter.patch(
     const ownerParam = (req as any).isAdminAsUser ? null : req.ctx!.userId;
     const params: any[] = [req.params.id, ws, ownerParam];
     let i = 4;
+    const allowedOutcomes = await activeOutcomeKeys(ws);
 
     for (const f of FIELDS) {
       if (!(f in b)) continue;
       let v = b[f];
       if (f === 'status' && !STATUSES.includes(v)) continue;
-      if (f === 'outcome' && v && !OUTCOMES.includes(v)) continue;
+      if (f === 'outcome' && v && !allowedOutcomes.has(String(v))) continue;
       if (f === 'phone') {
         const norm = normalizePhone(v);
         if (!norm) return res.status(400).json({ error: 'That phone number does not look valid' });

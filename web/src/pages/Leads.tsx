@@ -5,6 +5,7 @@ import { PageHeader } from '../components/Shell';
 import { Badge, EmptyState, Modal, Pager } from '../components/ui';
 import { ImportDialog } from './ImportDialog';
 import { OUTCOMES, OUTCOME_LABEL, STATUS_LABEL, fmtWhen, outcomeColor } from '../lib/format';
+import { useTags } from '../lib/outcomes';
 import { useDialer } from '../lib/dialer';
 import { useAuth } from '../lib/auth';
 
@@ -41,6 +42,7 @@ const PRESET_KEY = 'dd.presets';
 export function Leads({ asUserId }: { asUserId?: string } = {}) {
   const qc = useQueryClient();
   const { me } = useAuth();
+  const tags = useTags();
   const adminMode = Boolean(asUserId);
   const suffix = asUserId ? `userId=${asUserId}` : '';
   const withUser = (path: string) => (asUserId ? `${path}${path.includes('?') ? '&' : '?'}${suffix}` : path);
@@ -226,9 +228,9 @@ export function Leads({ asUserId }: { asUserId?: string } = {}) {
           >
             <option value="all">Any outcome</option>
             <option value="none">No outcome yet</option>
-            {OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {OUTCOME_LABEL[o]}
+            {tags.rows.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
               </option>
             ))}
           </select>
@@ -454,6 +456,7 @@ function LeadEditor({
 }) {
   const [form, setForm] = useState<any>({});
   const [agents, setAgents] = useState<any[]>([]);
+  const tags = useTags();
   useEffect(() => {
     if (lead) setForm({ ...lead });
   }, [lead]);
@@ -502,9 +505,9 @@ function LeadEditor({
           <label className="label">Outcome</label>
           <select className="field" value={form.outcome || ''} onChange={(e) => set('outcome', e.target.value)}>
             <option value="">— none —</option>
-            {OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {OUTCOME_LABEL[o]}
+            {tags.rows.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
               </option>
             ))}
           </select>

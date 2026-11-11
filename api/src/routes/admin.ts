@@ -13,6 +13,7 @@ import {
   requireAdmin,
 } from '../adminauth';
 import { primaryWorkspaceId } from '../workspace';
+import { activeOutcomeKeys } from '../outcomes';
 import { normalizePhone, formatPhone, toE164 } from '../filters';
 import { OUTCOMES, STATUSES } from '../config';
 import { getProvider } from '../providers';
@@ -485,7 +486,8 @@ adminRouter.patch(
       push('status', b.status);
     }
     if ('outcome' in b) {
-      if (b.outcome && !OUTCOMES.includes(b.outcome)) return res.status(400).json({ error: 'Unknown outcome' });
+      const allowed = await activeOutcomeKeys(ws);
+      if (b.outcome && !allowed.has(String(b.outcome))) return res.status(400).json({ error: 'Unknown tag' });
       push('outcome', b.outcome || null);
     }
     if ('assigned_user_id' in b) push('assigned_user_id', b.assigned_user_id || null);
@@ -519,6 +521,25 @@ adminRouter.delete(
     const r = await q(`delete from leads where id=$1 and workspace_id=$2 returning id`, [req.params.id, ws]);
     if (!r.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
+  }),
+);
+
+adminRouter.get(
+  '/sessions',
+  wrap(async (_req, res) => {
+    const ws = await primaryWorkspaceId();
+    const rows = await q(
+      `select s.id, s.name, s.status, s.created_at, u.email as owner_email,
+              (select count(*) from session_leads sl where sl.session_id=s.id)::int as total,
+              (select count(*) from session_leads sl where sl.session_id=s.id and sl.status='done')::int as done
+         from calling_sessions s
+         left join users u on u.id = s.owner_user_id
+        where s.workspace_id=$1
+        order by s.created_at desc
+        limit 200`,
+      [ws],
+    );
+    res.json({ rows });
   }),
 );
 

@@ -18,6 +18,8 @@ import { voiceRouter } from './routes/voice';
 import { callerIdsRouter } from './routes/callerids';
 import { adminRouter } from './routes/admin';
 import { poolRouter } from './routes/pool';
+import { outcomesRouter, adminOutcomesRouter } from './routes/outcomes';
+import { crmRouter } from './routes/crm';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -45,6 +47,9 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/brand', brandRouter);
 app.use('/api/caller-ids', callerIdsRouter);
+app.use('/api/admin/crm', crmRouter);
+app.use('/api/admin/outcomes', adminOutcomesRouter);
+app.use('/api/outcomes', outcomesRouter);
 app.use('/api/admin/pool', poolRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/voice', voiceRouter);

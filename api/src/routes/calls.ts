@@ -2,6 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import { q, one } from '../db';
 import { requireAuth, requirePerm, wrap } from '../middleware';
+import { activeOutcomeKeys } from '../outcomes';
 import { OUTCOMES } from '../config';
 import { dec } from '../crypto';
 
@@ -131,7 +132,8 @@ callsRouter.patch(
   wrap(async (req, res) => {
     const ws = req.ctx!.workspaceId;
     const outcome = String(req.body?.outcome || '');
-    if (!OUTCOMES.includes(outcome as any)) return res.status(400).json({ error: 'Unknown outcome' });
+    const allowed = await activeOutcomeKeys(ws);
+    if (!allowed.has(outcome)) return res.status(400).json({ error: 'Unknown tag for this workspace' });
 
     const row = await one(
       `update call_logs set outcome=$3 where id=$1 and workspace_id=$2 and user_id=$4 returning *`,

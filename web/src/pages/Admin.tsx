@@ -192,6 +192,8 @@ type View =
   | { kind: 'users' }
   | { kind: 'user'; id: string }
   | { kind: 'pool' }
+  | { kind: 'tags' }
+  | { kind: 'crm' }
   | { kind: 'calls' }
   | { kind: 'settings' };
 
@@ -239,6 +241,8 @@ export function Admin() {
     { key: 'overview', label: 'Overview' },
     { key: 'users', label: 'Users' },
     { key: 'pool', label: 'Leads' },
+    { key: 'tags', label: 'Tags' },
+    { key: 'crm', label: 'CRM' },
     { key: 'calls', label: 'Calls' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -288,6 +292,8 @@ export function Admin() {
         )}
         {view.kind === 'user' && <UserPage id={view.id} onBack={() => setView({ kind: 'users' })} />}
         {view.kind === 'pool' && <LeadPool />}
+        {view.kind === 'tags' && <TagsPage />}
+        {view.kind === 'crm' && <CrmPage />}
         {view.kind === 'calls' && <Calls />}
         {view.kind === 'settings' && <AdminSettings />}
       </main>
@@ -1736,6 +1742,432 @@ function LeadPool() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Tags (dispositions)
+ * ------------------------------------------------------------------ */
+
+const TAG_COLORS = ['green', 'emerald', 'sky', 'violet', 'amber', 'red', 'rose', 'zinc'];
+const TAG_CLASS: Record<string, string> = {
+  green: 'border-emerald-800/60 bg-emerald-950/40 text-emerald-300',
+  emerald: 'border-emerald-700/60 bg-emerald-900/40 text-emerald-200',
+  sky: 'border-sky-800/60 bg-sky-950/40 text-sky-300',
+  violet: 'border-violet-800/60 bg-violet-950/40 text-violet-300',
+  amber: 'border-amber-800/60 bg-amber-950/30 text-amber-300',
+  red: 'border-red-900/60 bg-red-950/40 text-red-300',
+  rose: 'border-rose-900/60 bg-rose-950/40 text-rose-300',
+  zinc: 'border-ink-600 bg-ink-800 text-zinc-300',
+};
+
+function TagsPage() {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [label, setLabel] = useState('');
+  const [color, setColor] = useState('sky');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    j('/api/admin/outcomes')
+      .then((d) => setRows(d.rows))
+      .catch(() => setRows([]));
+  }, []);
+  useEffect(load, [load]);
+
+  const save = async (id: string, patch: any) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await j(`/api/admin/outcomes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      load();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const add = async () => {
+    if (!label.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await post('/api/admin/outcomes', { label: label.trim(), color });
+      setLabel('');
+      load();
+      setMsg('Tag added');
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not add the tag');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">Tags</h1>
+        <p className="mt-0.5 text-xs text-muted">
+          The disposition buttons reps pick after a call. Rename, recolour, reorder, retire — the dialer follows
+          immediately.
+        </p>
+      </div>
+
+      <div className="panel flex flex-wrap items-end gap-3 p-4">
+        <div>
+          <Label>New tag</Label>
+          <input
+            className="field !w-64"
+            placeholder="e.g. Interested — send info"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && add()}
+          />
+        </div>
+        <div>
+          <Label>Colour</Label>
+          <select className="field !w-auto" value={color} onChange={(e) => setColor(e.target.value)}>
+            {TAG_COLORS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="btn-primary !py-2 text-xs" onClick={add} disabled={busy || !label.trim()}>
+          Add tag
+        </button>
+        {msg && <span className="text-2xs text-accent">{msg}</span>}
+      </div>
+
+      <div className="panel overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-ink-900">
+            <tr>
+              <th className="th">Tag</th>
+              <th className="th">Key</th>
+              <th className="th">Colour</th>
+              <th className="th text-right">Order</th>
+              <th className="th text-right">Used</th>
+              <th className="th">Status</th>
+              <th className="th text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows || []).map((t) => (
+              <tr key={t.id} className={t.active ? '' : 'opacity-50'}>
+                <td className="td">
+                  <input
+                    className="field !py-1 !text-xs"
+                    defaultValue={t.label}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v && v !== t.label) save(t.id, { label: v });
+                    }}
+                  />
+                </td>
+                <td className="td mono text-2xs text-zinc-500">{t.key}</td>
+                <td className="td">
+                  <select
+                    className={`field !w-auto !py-1 !text-2xs ${TAG_CLASS[t.color] || TAG_CLASS.zinc}`}
+                    value={t.color}
+                    onChange={(e) => save(t.id, { color: e.target.value })}
+                  >
+                    {TAG_COLORS.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="td text-right">
+                  <input
+                    className="field mono !w-16 !py-1 !text-right !text-2xs"
+                    type="number"
+                    defaultValue={t.sort}
+                    onBlur={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v !== t.sort) save(t.id, { sort: v });
+                    }}
+                  />
+                </td>
+                <td className="td text-right mono text-zinc-400">{t.uses}</td>
+                <td className="td">
+                  {t.active ? <Pill tone="ok">active</Pill> : <Pill tone="off">retired</Pill>}
+                </td>
+                <td className="td text-right">
+                  {t.active ? (
+                    <button
+                      className="btn-ghost !px-2 !py-1 text-2xs !text-red-300"
+                      disabled={busy}
+                      onClick={() => save(t.id, { active: false })}
+                    >
+                      Retire
+                    </button>
+                  ) : (
+                    <button className="btn-ghost !px-2 !py-1 text-2xs" disabled={busy} onClick={() => save(t.id, { active: true })}>
+                      Bring back
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {rows && rows.length === 0 && <p className="px-4 py-8 text-center text-xs text-muted">No tags yet.</p>}
+      </div>
+
+      <p className="text-2xs text-muted">
+        Retiring keeps the tag on past calls but removes it from the dialer. Tags used by automation — voicemail, no
+        answer, busy — are best left active.
+      </p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * CRM — GoHighLevel
+ * ------------------------------------------------------------------ */
+
+function CrmPage() {
+  const [st, setSt] = useState<any>(null);
+  const [tok, setTok] = useState('');
+  const [loc, setLoc] = useState('');
+  const [pipe, setPipe] = useState('');
+  const [stage, setStage] = useState('');
+  const [users, setUsers] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [tags, setTags] = useState<any[]>([]);
+  const [scope, setScope] = useState<'all' | 'user' | 'session' | 'tag'>('all');
+  const [userId, setUserId] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [outcome, setOutcome] = useState('');
+  const [onlyUnpushed, setOnlyUnpushed] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [pullLimit, setPullLimit] = useState(50);
+  const [pullTo, setPullTo] = useState('');
+  const [pullMsg, setPullMsg] = useState<string | null>(null);
+
+  const loadStatus = useCallback(() => {
+    j('/api/admin/crm/status')
+      .then((s) => {
+        setSt(s);
+        setLoc(s.locationId || '');
+        setPipe(s.pipelineId || '');
+        setStage(s.stageId || '');
+      })
+      .catch(() => setSt(null));
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    j('/api/admin/users').then((d) => setUsers(d.rows || [])).catch(() => {});
+    j('/api/admin/sessions').then((d) => setSessions(d.rows || [])).catch(() => {});
+    j('/api/admin/outcomes').then((d) => setTags(d.rows || [])).catch(() => {});
+  }, [loadStatus]);
+
+  const saveConn = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await j('/api/admin/crm/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ token: tok, locationId: loc, pipelineId: pipe, stageId: stage }),
+      });
+      setTok('');
+      setMsg('Saved');
+      loadStatus();
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const push = async () => {
+    setBusy(true);
+    setPushMsg(null);
+    try {
+      const body: any = { onlyUnpushed };
+      if (scope === 'user' && userId) body.userId = userId;
+      if (scope === 'session' && sessionId) body.sessionId = sessionId;
+      if (scope === 'tag' && outcome) body.outcome = outcome;
+      const r = await post('/api/admin/crm/push', body);
+      setPushMsg(
+        `${r.pushed} sent · ${r.existing} already there · ${r.failed} failed` +
+          (r.errors?.length ? ` — ${r.errors[0]}` : ''),
+      );
+    } catch (e: any) {
+      setPushMsg(e?.message || 'Push failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pull = async () => {
+    setBusy(true);
+    setPullMsg(null);
+    try {
+      const r = await post('/api/admin/crm/pull', { limit: pullLimit, userId: pullTo || undefined });
+      setPullMsg(`${r.created} new leads added · ${r.duplicates} already had that number · ${r.invalid} without a phone`);
+    } catch (e: any) {
+      setPullMsg(e?.message || 'Pull failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">CRM · GoHighLevel</h1>
+        <p className="mt-0.5 text-xs text-muted">
+          Send leads to GoHighLevel and bring contacts back in as leads.
+        </p>
+      </div>
+
+      <div className="panel max-w-2xl p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Connection</h2>
+          {st?.configured ? <Pill tone="ok">connected</Pill> : <Pill tone="off">not connected</Pill>}
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Label>Private integration token</Label>
+            <input
+              className="field mono"
+              type="password"
+              value={tok}
+              onChange={(e) => setTok(e.target.value)}
+              placeholder={st?.hasToken ? 'saved — leave blank to keep it' : 'pit-…'}
+            />
+          </div>
+          <div>
+            <Label>Location ID</Label>
+            <input className="field mono" value={loc} onChange={(e) => setLoc(e.target.value)} placeholder="ve9EPM…" />
+          </div>
+          <div>
+            <Label>Pipeline ID (optional)</Label>
+            <input className="field mono" value={pipe} onChange={(e) => setPipe(e.target.value)} />
+          </div>
+          <div>
+            <Label>Stage ID (optional)</Label>
+            <input className="field mono" value={stage} onChange={(e) => setStage(e.target.value)} />
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <button className="btn-primary !py-2 text-xs" onClick={saveConn} disabled={busy}>
+            Save connection
+          </button>
+          {msg && <span className="text-2xs text-accent">{msg}</span>}
+        </div>
+        <p className="mt-2 text-2xs text-muted">
+          Create the token in GoHighLevel under Settings → Private Integrations, with contacts read/write.
+        </p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="panel p-4">
+          <h2 className="text-sm font-semibold">Send leads to GoHighLevel</h2>
+          <div className="mt-3 space-y-3">
+            <div>
+              <Label>Which leads</Label>
+              <select className="field" value={scope} onChange={(e) => setScope(e.target.value as any)}>
+                <option value="all">All leads</option>
+                <option value="user">One user's leads</option>
+                <option value="session">One session</option>
+                <option value="tag">Everything with a tag</option>
+              </select>
+            </div>
+
+            {scope === 'user' && (
+              <select className="field" value={userId} onChange={(e) => setUserId(e.target.value)}>
+                <option value="">Choose a user…</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.fullName ? `${u.fullName} — ${u.email}` : u.email}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {scope === 'session' && (
+              <select className="field" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
+                <option value="">Choose a session…</option>
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} — {s.done}/{s.total} · {s.owner_email || 'no owner'}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {scope === 'tag' && (
+              <select className="field" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+                <option value="">Choose a tag…</option>
+                {tags.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="accent-check"
+                checked={onlyUnpushed}
+                onChange={(e) => setOnlyUnpushed(e.target.checked)}
+              />
+              only leads not sent yet
+            </label>
+
+            <button className="btn-primary !py-2 text-xs" onClick={push} disabled={busy || !st?.configured}>
+              Send to GoHighLevel
+            </button>
+            {pushMsg && <p className="text-2xs text-accent">{pushMsg}</p>}
+          </div>
+        </div>
+
+        <div className="panel p-4">
+          <h2 className="text-sm font-semibold">Bring contacts in as leads</h2>
+          <div className="mt-3 space-y-3">
+            <div>
+              <Label>How many</Label>
+              <select className="field" value={pullLimit} onChange={(e) => setPullLimit(Number(e.target.value))}>
+                {[25, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n} contacts
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label>Assign them to</Label>
+              <select className="field" value={pullTo} onChange={(e) => setPullTo(e.target.value)}>
+                <option value="">My lead pool (unassigned)</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.fullName ? `${u.fullName} — ${u.email}` : u.email}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button className="btn-primary !py-2 text-xs" onClick={pull} disabled={busy || !st?.configured}>
+              Pull from GoHighLevel
+            </button>
+            {pullMsg && <p className="text-2xs text-accent">{pullMsg}</p>}
+          </div>
+          <p className="mt-3 text-2xs text-muted">
+            Phone numbers are matched on the way in, so an existing lead is never duplicated.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
