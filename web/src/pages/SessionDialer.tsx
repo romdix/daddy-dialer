@@ -6,6 +6,8 @@ import { PageHeader } from '../components/Shell';
 import { Badge } from '../components/ui';
 import { QUICK_OUTCOMES, OUTCOME_LABEL, fmtDuration, fmtWhen, outcomeColor } from '../lib/format';
 import { useDialer } from '../lib/dialer';
+import { DialPad } from '../components/DialPad';
+import { PhoneOff } from '../components/PhoneWidget';
 
 interface Row {
   session_lead_id: string;
@@ -421,7 +423,8 @@ export function SessionDialer() {
                     <button className="btn-ghost" onClick={dialer.toggleMute}>
                       {dialer.muted ? 'Unmute' : 'Mute'}
                     </button>
-                    <button className="btn-danger" onClick={dialer.hangup}>
+                    <button className="btn-danger flex items-center gap-1.5" onClick={dialer.hangup}>
+                      <PhoneOff size={14} />
                       Hang up
                     </button>
                   </>
@@ -463,6 +466,21 @@ export function SessionDialer() {
                 )}
               </div>
 
+              {inCall && (
+                <div className="mt-4 rounded border border-ink-700 bg-ink-900/50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-2xs uppercase tracking-wider text-muted">Keypad — phone menus</p>
+                    <p className="text-2xs text-zinc-500">
+                      Press <span className="text-zinc-300">1</span>, <span className="text-zinc-300">2</span>,{' '}
+                      <span className="text-zinc-300">0</span>… when the recording asks you to
+                    </p>
+                  </div>
+                  <div className="mt-2 max-w-[280px]">
+                    <DialPad onKey={(k) => dialer.sendDigit(k)} compact />
+                  </div>
+                </div>
+              )}
+
               {toast && <p className="mt-3 text-xs text-accent">{toast}</p>}
               {dialer.error && <p className="mt-3 text-xs text-red-400">{dialer.error}</p>}
             </div>
@@ -501,7 +519,10 @@ export function SessionDialer() {
               />
               <button
                 className="mt-3 text-2xs text-muted underline hover:text-zinc-300"
-                onClick={() => advance(ended.leadIndex)}
+                onClick={() => {
+                  setEnded(null);
+                  advance(ended.leadIndex);
+                }}
               >
                 Skip without a disposition
               </button>
@@ -520,7 +541,10 @@ export function SessionDialer() {
               >
                 Change outcome
               </button>
-              <button className="ml-2 underline hover:text-zinc-300" onClick={() => advance(ended.leadIndex)}>
+              <button className="ml-2 underline hover:text-zinc-300" onClick={() => {
+                setEnded(null);
+                advance(ended.leadIndex);
+              }}>
                 Next
               </button>
             </div>

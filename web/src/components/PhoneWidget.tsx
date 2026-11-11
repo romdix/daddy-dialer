@@ -80,7 +80,7 @@ export function PhoneWidget() {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2">
+    <div className="fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 flex-col items-center gap-2">
       {open && (
         <div className="w-[300px] panel shadow-2xl overflow-hidden">
           <div className="flex items-center justify-between border-b border-ink-700 px-3 py-2">
@@ -130,6 +130,13 @@ export function PhoneWidget() {
               />
             </div>
 
+            {inCall && (
+              <p className="mb-2 rounded border border-ink-700 bg-ink-900/60 px-2 py-1.5 text-2xs text-muted">
+                Tap a key to answer a phone menu — <span className="text-zinc-300">1</span> for sales,{' '}
+                <span className="text-zinc-300">0</span> for an operator.
+              </p>
+            )}
+
             <DialPad onKey={press} compact />
 
             {!inCall && (
@@ -166,7 +173,11 @@ export function PhoneWidget() {
                   >
                     {d.muted ? 'Unmute' : 'Mute'}
                   </button>
-                  <button className="btn-danger flex-1" onClick={d.hangup}>
+                  <button
+                    className="btn-danger flex flex-1 items-center justify-center gap-1.5"
+                    onClick={d.hangup}
+                  >
+                    <PhoneOff size={14} />
                     Hang up
                   </button>
                 </>
@@ -214,17 +225,65 @@ export function PhoneWidget() {
         </div>
       )}
 
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="h-12 w-12 rounded-full bg-accent shadow-lg shadow-accent/20
-                   hover:bg-accent-dim transition flex items-center justify-center"
-        style={{ color: 'var(--on-accent)' }}
-        title="Open dialer"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />
-        </svg>
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-11 items-center gap-2 rounded-full bg-accent px-4 text-sm font-semibold shadow-lg shadow-accent/20
+                     transition hover:bg-accent-dim"
+          style={{ color: 'var(--on-accent)' }}
+          title="Open the dial pad — use it to answer phone menus"
+        >
+          <KeypadIcon size={18} />
+          <span>{open ? 'Close' : 'Dialpad'}</span>
+        </button>
+
+        {inCall && (
+          <button
+            onClick={d.hangup}
+            className="flex h-11 items-center gap-2 rounded-full border border-red-800 bg-red-950 px-4 text-sm font-semibold
+                       text-red-200 shadow-lg transition hover:bg-red-900"
+            title="Hang up this call"
+          >
+            <PhoneOff size={18} />
+            <span>Hang up</span>
+            <span className="mono text-2xs opacity-80">{fmtDuration(d.seconds)}</span>
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+function KeypadIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="6" cy="6" r="1.8" />
+      <circle cx="12" cy="6" r="1.8" />
+      <circle cx="18" cy="6" r="1.8" />
+      <circle cx="6" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="18" cy="12" r="1.8" />
+      <circle cx="6" cy="18" r="1.8" />
+      <circle cx="12" cy="18" r="1.8" />
+      <circle cx="18" cy="18" r="1.8" />
+    </svg>
+  );
+}
+
+export function PhoneOff({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 3.07 5.18 2 2 0 0 1 5.09 3h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L9.07 10.9" />
+      <line x1="2" y1="2" x2="22" y2="22" />
+    </svg>
   );
 }

@@ -477,7 +477,7 @@ voiceRouter.post(
 
     // A keypad digit briefly pulls the lead out of the room to play the tone.
     // That looks like a hang-up, so ignore the leave event just after a digit.
-    const recentDtmf = call.dtmf_at && Date.now() - new Date(call.dtmf_at).getTime() < 15000;
+    const recentDtmf = call.dtmf_at && Date.now() - new Date(call.dtmf_at).getTime() < 8000;
     console.log('[voice] conf', callLogId.slice(0, 8), ev, participant.slice(0, 8));
 
     if (ev === 'start' && confSid) {
@@ -1125,6 +1125,11 @@ voiceRouter.post(
     // Inbound calls are a direct bridge, so the browser can send tones itself.
     if (call.direction === 'inbound') return res.json({ native: true });
 
+    // Nothing to play into once the call is over.
+    if (!['in_progress', 'connecting'].includes(String(call.status))) {
+      return res.status(409).json({ error: 'The call has already ended' });
+    }
+
     const leadSid = String(call.lead_call_sid || '');
     if (!leadSid.startsWith('CA')) return res.status(409).json({ error: 'The call is not connected yet' });
 
@@ -1132,9 +1137,15 @@ voiceRouter.post(
     const p = getProvider(call.provider);
     if (!p.redirectCall) return res.json({ native: true });
 
-    await q(`update call_logs set dtmf_at=now() where id=$1`, [callLogId]);
+    // Mark the digit only once the redirect is accepted: a failed redirect must
+    // not leave the "ignore the next leave event" window armed.
     const qs = `callLogId=${encodeURIComponent(callLogId)}&workspaceId=${encodeURIComponent(ws)}&digits=${encodeURIComponent(digits)}`;
-    await p.redirectCall(s, leadSid, `${baseUrl(req)}/api/voice/dtmf-twiml?${qs}`);
+    try {
+      await p.redirectCall(s, leadSid, `${baseUrl(req)}/api/voice/dtmf-twiml?${qs}`);
+    } catch {
+      return res.status(409).json({ error: 'The call is no longer connected' });
+    }
+    await q(`update call_logs set dtmf_at=now() where id=$1`, [callLogId]);
     console.log('[voice] dtmf', callLogId.slice(0, 8), digits);
     res.json({ ok: true });
   }),
