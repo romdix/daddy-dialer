@@ -46,6 +46,8 @@ export function AdminLeads() {
   const [uploads, setUploads] = useState<any[]>([]);
   const [openFile, setOpenFile] = useState<any | null>(null);
   const [fileLeads, setFileLeads] = useState<any[] | null>(null);
+  const [fileSel, setFileSel] = useState<string[]>([]);
+  const [fileTarget, setFileTarget] = useState('');
 
   const query = new URLSearchParams({
     page: String(page),
@@ -96,13 +98,32 @@ export function AdminLeads() {
       .catch(() => setFileLeads([]));
   }, [openFile]);
 
-  const removeFile = async (u: any) => {
-    if (!confirm(`Delete "${u.filename}" and the ${u.total} leads that came with it?`)) return;
+  const removeFile = async (u: any) => {    if (!confirm(`Delete "${u.filename}" and the ${u.total} leads that came with it?`)) return;
     try {
       await j(`/api/admin/pool/uploads/${u.id}`, { method: 'DELETE' });
       await Promise.all([load(), loadUploads()]);
     } catch (e: any) {
       setMsg(e?.message || 'Could not delete that file');
+    }
+  };
+
+  const assignFiles = async () => {
+    if (!fileSel.length || !fileTarget) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await post('/api/admin/pool/assign', {
+        userId: fileTarget,
+        uploadIds: fileSel,
+        limit: 100000,
+      });
+      setMsg(`${r.assigned} leads assigned from ${fileSel.length} file${fileSel.length === 1 ? '' : 's'}`);
+      setFileSel([]);
+      await Promise.all([load(), loadUploads()]);
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not assign those files');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -313,10 +334,43 @@ export function AdminLeads() {
             Every CSV, Excel or GoHighLevel import stays here as a file you can reopen, export or delete.
           </p>
         </div>
+
+        {fileSel.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-ink-800 bg-ink-900/60 px-4 py-3 text-xs">
+            <span className="text-muted">
+              {fileSel.length} file{fileSel.length === 1 ? '' : 's'} selected — assigns the leads still unassigned
+              in them
+            </span>
+            <select
+              className="field !w-56 !py-1.5 text-xs"
+              value={fileTarget}
+              onChange={(e) => setFileTarget(e.target.value)}
+            >
+              <option value="">Choose a user…</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName || u.email}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn-primary !py-1.5 text-xs"
+              disabled={busy || !fileTarget}
+              onClick={assignFiles}
+            >
+              Assign
+            </button>
+            <button className="text-2xs text-muted underline" onClick={() => setFileSel([])}>
+              clear
+            </button>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-ink-900">
               <tr>
+                <th className="th w-8"></th>
                 <th className="th">File</th>
                 <th className="th">Uploaded</th>
                 <th className="th text-right">Leads</th>
@@ -327,7 +381,17 @@ export function AdminLeads() {
             </thead>
             <tbody>
               {uploads.map((u) => (
-                <tr key={u.id}>
+                <tr key={u.id} className={fileSel.includes(u.id) ? 'bg-ink-800/60' : undefined}>
+                  <td className="td">
+                    <input
+                      type="checkbox"
+                      className="accent-check"
+                      checked={fileSel.includes(u.id)}
+                      onChange={(e) =>
+                        setFileSel(e.target.checked ? [...fileSel, u.id] : fileSel.filter((id) => id !== u.id))
+                      }
+                    />
+                  </td>
                   <td className="td max-w-[320px] truncate">{u.filename}</td>
                   <td className="td text-2xs text-zinc-500">{fmtDateTime(u.created_at)}</td>
                   <td className="td text-right mono text-zinc-300">{u.total}</td>

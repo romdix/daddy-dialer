@@ -254,7 +254,10 @@ poolRouter.post(
 
     const ids: string[] = Array.isArray(req.body?.leadIds) ? req.body.leadIds : [];
     const uploadId = req.body?.uploadId ? String(req.body.uploadId) : '';
-    const limit = Math.max(1, Math.min(100000, Number(req.body?.limit) || 0));
+    const uploadIds: string[] = Array.isArray(req.body?.uploadIds)
+      ? req.body.uploadIds.filter(Boolean).map(String)
+      : [];
+    const limit = Math.max(1, Math.min(100000, Number(req.body?.limit) || 100000));
 
     // Optional conditions, so "assign 200 from the pool" can mean "the ones in
     // Austin that have not been called yet".
@@ -264,6 +267,10 @@ poolRouter.post(
     if (uploadId) {
       params.push(uploadId);
       parts.push(`upload_id = $${params.length}`);
+    }
+    if (!uploadId && uploadIds.length) {
+      params.push(uploadIds);
+      parts.push(`upload_id = any($${params.length}::uuid[])`);
     }
     if (ids.length) {
       params.push(ids);
