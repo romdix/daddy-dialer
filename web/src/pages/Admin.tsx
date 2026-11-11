@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Leads } from './Leads';
 import { ImportDialog } from './ImportDialog';
+import { AdminLeads, AdminSessions } from './AdminLeads';
 import { CallerIdsPanel } from '../components/CallerIdsPanel';
 import { VoicemailPanel } from '../components/VoicemailPanel';
 import { DataPanel } from '../components/DataPanel';
@@ -192,6 +193,7 @@ type View =
   | { kind: 'users' }
   | { kind: 'user'; id: string }
   | { kind: 'pool' }
+  | { kind: 'sessions' }
   | { kind: 'tags' }
   | { kind: 'crm' }
   | { kind: 'calls' }
@@ -241,6 +243,7 @@ export function Admin() {
     { key: 'overview', label: 'Overview' },
     { key: 'users', label: 'Users' },
     { key: 'pool', label: 'Leads' },
+    { key: 'sessions', label: 'Sessions' },
     { key: 'tags', label: 'Tags' },
     { key: 'crm', label: 'CRM' },
     { key: 'calls', label: 'Calls' },
@@ -291,7 +294,8 @@ export function Admin() {
           <Users onOpenUser={(id) => setView({ kind: 'user', id })} onChanged={loadSession} />
         )}
         {view.kind === 'user' && <UserPage id={view.id} onBack={() => setView({ kind: 'users' })} />}
-        {view.kind === 'pool' && <LeadPool />}
+        {view.kind === 'pool' && <AdminLeads />}
+        {view.kind === 'sessions' && <AdminSessions />}
         {view.kind === 'tags' && <TagsPage />}
         {view.kind === 'crm' && <CrmPage />}
         {view.kind === 'calls' && <Calls />}
