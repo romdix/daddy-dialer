@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import { api } from '../lib/api';
 import { Modal } from '../components/ui';
 
@@ -53,21 +54,7 @@ export function ImportDialog({
   const [pasteMode, setPasteMode] = useState(false);
   const [pasted, setPasted] = useState('');
 
-  const parse = (text: string) => {
-    const parsed = Papa.parse<Record<string, string>>(text, {
-      header: true,
-      skipEmptyLines: 'greedy',
-      transformHeader: (h) => h.trim(),
-    });
-    const fields = (parsed.meta.fields || []).filter(Boolean);
-    if (!fields.length) {
-      setError('Could not find a header row. The first line should be column names like business_name,phone,city.');
-      return;
-    }
-    setHeaders(fields);
-    setRows(parsed.data.filter((r) => Object.values(r).some((v) => String(v || '').trim())));
-    setError(null);
-
+  const autoMap = (fields: string[]) => {
     const auto: Record<string, string> = {};
     for (const t of TARGETS) {
       const hit = fields.find((f) => SYNONYMS[t.key]?.includes(norm(f)));
@@ -84,11 +71,53 @@ export function ImportDialog({
     setMapping(auto);
   };
 
+  const parse = (text: string) => {
+    const parsed = Papa.parse<Record<string, string>>(text, {
+      header: true,
+      skipEmptyLines: 'greedy',
+      transformHeader: (h) => h.trim(),
+    });
+    const fields = (parsed.meta.fields || []).filter(Boolean);
+    if (!fields.length) {
+      setError('Could not find a header row. The first line should be column names like business_name,phone,city.');
+      return;
+    }
+    setHeaders(fields);
+    setRows(parsed.data.filter((r) => Object.values(r).some((v) => String(v || '').trim())));
+    setError(null);
+    autoMap(fields);
+  };
+
+  /** Excel workbooks: first sheet, first row is the header. */
+  const parseSheet = (data: ArrayBuffer) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(data), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: false });
+      const fields = Object.keys(json[0] || {}).filter(Boolean);
+      if (!fields.length) {
+        setError('That sheet looks empty.');
+        return;
+      }
+      setHeaders(fields);
+      setRows(json.filter((r) => Object.values(r).some((v) => String(v ?? '').trim())));
+      setError(null);
+      autoMap(fields);
+    } catch {
+      setError('Could not read that spreadsheet. Try saving it as .xlsx, or export it to CSV.');
+    }
+  };
+
   const onFile = (f: File) => {
     setFileName(f.name);
+    const excel = /\.(xlsx|xls)$/i.test(f.name);
     const reader = new FileReader();
-    reader.onload = () => parse(String(reader.result || ''));
-    reader.readAsText(f);
+    reader.onload = () => {
+      if (excel) parseSheet(reader.result as ArrayBuffer);
+      else parse(String(reader.result || ''));
+    };
+    if (excel) reader.readAsArrayBuffer(f);
+    else reader.readAsText(f);
   };
 
   const preview = useMemo(() => rows.slice(0, 5), [rows]);
@@ -199,21 +228,23 @@ export function ImportDialog({
               if (f) onFile(f);
             }}
           >
-            <p className="text-sm text-zinc-300">Drop a CSV here, or</p>
+            <p className="text-sm text-zinc-300">Drop a CSV or Excel file here, or</p>
             <button className="btn-ghost mt-2" onClick={() => fileRef.current?.click()}>
               Choose file
             </button>
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) onFile(f);
               }}
             />
-            <p className="mt-3 text-2xs text-muted">First row must be column names. Nothing is uploaded until you confirm.</p>
+            <p className="mt-3 text-2xs text-muted">
+              First row must be column names (.csv, .xlsx or .xls). Nothing is uploaded until you confirm.
+            </p>
           </div>
 
           <div className="text-center">

@@ -43,6 +43,9 @@ export function AdminLeads() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [uploads, setUploads] = useState<any[]>([]);
+  const [openFile, setOpenFile] = useState<any | null>(null);
+  const [fileLeads, setFileLeads] = useState<any[] | null>(null);
 
   const query = new URLSearchParams({
     page: String(page),
@@ -71,6 +74,37 @@ export function AdminLeads() {
   useEffect(() => {
     load().catch(() => setRows([]));
   }, [load]);
+
+  const loadUploads = useCallback(async () => {
+    try {
+      const d = await j('/api/admin/pool/uploads');
+      setUploads(d.rows || []);
+    } catch {
+      setUploads([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadUploads();
+  }, [loadUploads]);
+
+  useEffect(() => {
+    if (!openFile) return;
+    setFileLeads(null);
+    j(`/api/admin/hub/leads?uploadId=${openFile.id}&limit=200`)
+      .then((d) => setFileLeads(d.rows || []))
+      .catch(() => setFileLeads([]));
+  }, [openFile]);
+
+  const removeFile = async (u: any) => {
+    if (!confirm(`Delete "${u.filename}" and the ${u.total} leads that came with it?`)) return;
+    try {
+      await j(`/api/admin/pool/uploads/${u.id}`, { method: 'DELETE' });
+      await Promise.all([load(), loadUploads()]);
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not delete that file');
+    }
+  };
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -272,13 +306,135 @@ export function AdminLeads() {
         )}
       </div>
 
+      <div className="panel overflow-hidden">
+        <div className="border-b border-ink-800 px-4 py-3">
+          <h2 className="text-sm font-semibold">Uploaded files</h2>
+          <p className="text-2xs text-muted">
+            Every CSV, Excel or GoHighLevel import stays here as a file you can reopen, export or delete.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-ink-900">
+              <tr>
+                <th className="th">File</th>
+                <th className="th">Uploaded</th>
+                <th className="th text-right">Leads</th>
+                <th className="th text-right">Unassigned</th>
+                <th className="th">Assigned to</th>
+                <th className="th text-right"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {uploads.map((u) => (
+                <tr key={u.id}>
+                  <td className="td max-w-[320px] truncate">{u.filename}</td>
+                  <td className="td text-2xs text-zinc-500">{fmtDateTime(u.created_at)}</td>
+                  <td className="td text-right mono text-zinc-300">{u.total}</td>
+                  <td className="td text-right mono text-zinc-400">{u.remaining}</td>
+                  <td className="td text-2xs text-zinc-400">
+                    {u.assignees ? `${u.assignees} ${u.assignees === 1 ? 'user' : 'users'}` : '—'}
+                  </td>
+                  <td className="td text-right whitespace-nowrap">
+                    <button className="btn-ghost !px-2 !py-1 text-2xs" onClick={() => setOpenFile(u)}>
+                      View
+                    </button>
+                    <a
+                      className="btn-ghost !px-2 !py-1 text-2xs"
+                      href={`/api/admin/hub/leads.csv?uploadId=${u.id}`}
+                      download
+                    >
+                      CSV
+                    </a>
+                    <button className="btn-ghost !px-2 !py-1 text-2xs !text-red-300" onClick={() => removeFile(u)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {uploads.length === 0 && (
+          <p className="px-4 py-8 text-center text-xs text-muted">
+            Nothing uploaded yet. Import a CSV or Excel file, or pull from GoHighLevel.
+          </p>
+        )}
+      </div>
+
+      {openFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setOpenFile(null)}>
+          <div className="panel flex max-h-[85vh] w-full max-w-4xl flex-col p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">{openFile.filename}</h2>
+                <p className="text-2xs text-muted">
+                  {openFile.total} leads · {openFile.remaining} still unassigned · uploaded{' '}
+                  {fmtDateTime(openFile.created_at)}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <a
+                  className="btn-ghost !py-1.5 text-xs"
+                  href={`/api/admin/hub/leads.csv?uploadId=${openFile.id}`}
+                  download
+                >
+                  Export CSV
+                </a>
+                <button className="btn-ghost !py-1.5 text-xs" onClick={() => setOpenFile(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 min-h-0 flex-1 overflow-auto rounded border border-ink-800">
+              <table className="w-full">
+                <thead className="sticky top-0 bg-ink-900">
+                  <tr>
+                    <th className="th">Business</th>
+                    <th className="th">Phone</th>
+                    <th className="th">City</th>
+                    <th className="th">Owner</th>
+                    <th className="th">Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(fileLeads || []).map((l: any) => (
+                    <tr key={l.id}>
+                      <td className="td max-w-[220px] truncate">{l.business_name || '—'}</td>
+                      <td className="td mono text-zinc-400">{l.phone}</td>
+                      <td className="td text-2xs text-zinc-500">
+                        {[l.city, l.state].filter(Boolean).join(', ') || '—'}
+                      </td>
+                      <td className="td text-2xs text-zinc-400">{l.owner_email || 'unassigned'}</td>
+                      <td className="td">
+                        <OutcomeBadge outcome={l.outcome} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!fileLeads && <p className="p-6 text-center text-xs text-muted">Loading…</p>}
+              {fileLeads && fileLeads.length === 0 && (
+                <p className="p-8 text-center text-xs text-muted">This file has no leads left.</p>
+              )}
+            </div>
+            {fileLeads && fileLeads.length === 200 && (
+              <p className="mt-2 text-2xs text-muted">
+                Showing the first 200. Export CSV for the whole file.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <ImportDialog
         open={importOpen}
         pool
         onClose={() => setImportOpen(false)}
         onDone={async () => {
           setPage(1);
-          await load();
+          await Promise.all([load(), loadUploads()]);
         }}
       />
     </div>
