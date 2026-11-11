@@ -58,7 +58,7 @@ export async function pullFromGhl(ws: string, opts: PullOpts = {}): Promise<Pull
   }
 
   const s = await one<any>(
-    `select ghl_cursor_id, ghl_sync_tag, ghl_skip_recent_days from settings where workspace_id=$1`,
+    `select ghl_sync_tag, ghl_skip_recent_days from settings where workspace_id=$1`,
     [ws],
   );
 
@@ -70,7 +70,13 @@ export async function pullFromGhl(ws: string, opts: PullOpts = {}): Promise<Pull
   const useTag = opts.useTag !== false && Boolean(tag);
   const skipDays = Math.max(0, Number(s?.ghl_skip_recent_days ?? 90));
 
-  let cursor: string | null = opts.restart ? null : s?.ghl_cursor_id || null;
+  // Each combination of filters keeps its own bookmark.
+  const filterKey = [query.toLowerCase(), state, city].filter(Boolean).join('|');
+  const saved = await one<{ cursor_id: string | null }>(
+    `select cursor_id from ghl_cursors where workspace_id=$1 and filter_key=$2`,
+    [ws, filterKey],
+  );
+  let cursor: string | null = opts.restart ? null : saved?.cursor_id || null;
   const candidates: any[] = [];
   let atEnd = false;
   let pages = 0;
@@ -134,10 +140,14 @@ export async function pullFromGhl(ws: string, opts: PullOpts = {}): Promise<Pull
   }
 
   // Save the pointer even when nothing survived the filters.
-  await q(`update settings set ghl_cursor_id=$2, ghl_cursor_at=now() where workspace_id=$1`, [
-    ws,
-    atEnd ? null : cursor,
-  ]);
+  await q(
+    `insert into ghl_cursors (workspace_id, filter_key, cursor_id, updated_at)
+     values ($1,$2,$3,now())
+     on conflict (workspace_id, filter_key)
+     do update set cursor_id=excluded.cursor_id, updated_at=now()`,
+    [ws, filterKey, atEnd ? null : cursor],
+  );
+  await q(`update settings set ghl_cursor_at=now() where workspace_id=$1`, [ws]);
 
   // Quality gate against what we already know.
   const norms = candidates.map((c) => c.norm);
