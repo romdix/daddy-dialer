@@ -626,7 +626,7 @@ function NewUserDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
 
 function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
   const [data, setData] = useState<any>(null);
-  const [tab, setTab] = useState<'overview' | 'leads' | 'settings' | 'calls'>('overview');
+  const [tab, setTab] = useState<'overview' | 'leads' | 'sessions' | 'settings' | 'calls'>('overview');
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -690,6 +690,7 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
         {[
           ['overview', 'Overview'],
           ['leads', 'Assigned leads'],
+          ['sessions', 'Sessions'],
           ['settings', 'Settings & permissions'],
           ['calls', 'Call history'],
         ].map(([k, label]) => (
@@ -707,6 +708,7 @@ function UserPage({ id, onBack }: { id: string; onBack: () => void }) {
 
       {tab === 'overview' && <UserOverview data={data} userId={u.id} />}
       {tab === 'leads' && <Leads asUserId={u.id} />}
+      {tab === 'sessions' && <UserSessions userId={u.id} />}
       {tab === 'settings' && <UserSettings user={u} onSaved={load} />}
       {tab === 'calls' && <UserCalls userId={u.id} />}
     </div>
@@ -1015,6 +1017,48 @@ function UserSettings({ user, onSaved }: { user: any; onSaved: () => void }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function UserSessions({ userId }: { userId: string }) {
+  const [rows, setRows] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    j('/api/admin/sessions')
+      .then((d) => setRows((d.rows || []).filter((s: any) => s.owner_user_id === userId)))
+      .catch(() => setRows([]));
+  }, [userId]);
+
+  if (!rows) return <Splash />;
+
+  return (
+    <div className="panel overflow-hidden">
+      <table className="w-full">
+        <thead className="bg-ink-900">
+          <tr>
+            <th className="th">Session</th>
+            <th className="th">Created</th>
+            <th className="th text-right">Progress</th>
+            <th className="th">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s) => (
+            <tr key={s.id}>
+              <td className="td">{s.name}</td>
+              <td className="td text-2xs text-zinc-500">{fmtNY(s.created_at)}</td>
+              <td className="td text-right mono text-zinc-400">
+                {s.done}/{s.total}
+              </td>
+              <td className="td">
+                <Pill tone="muted">{s.status}</Pill>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length === 0 && <p className="px-4 py-10 text-center text-xs text-muted">No sessions yet.</p>}
     </div>
   );
 }

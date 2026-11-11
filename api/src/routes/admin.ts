@@ -529,7 +529,7 @@ adminRouter.get(
   wrap(async (_req, res) => {
     const ws = await primaryWorkspaceId();
     const rows = await q(
-      `select s.id, s.name, s.status, s.created_at, u.email as owner_email,
+      `select s.id, s.name, s.status, s.created_at, s.owner_user_id, u.email as owner_email,
               (select count(*) from session_leads sl where sl.session_id=s.id)::int as total,
               (select count(*) from session_leads sl where sl.session_id=s.id and sl.status='done')::int as done
          from calling_sessions s
