@@ -187,8 +187,8 @@ crmRouter.post(
       invalid,
       received: collected.length,
       atEnd,
-      uploadName: created ? uploadName : null,
-      uploadId: created ? up!.id : null,
+      uploadName: (tot?.n || created) ? uploadName : null,
+      uploadId: (tot?.n || created) ? up!.id : null,
     });
   }),
 );
